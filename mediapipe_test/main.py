@@ -23,7 +23,7 @@ import matplotlib.pyplot as plt
 import cv2
 
 
-def draw_landmarks_on_image(rgb_image, detection_result):
+def draw_face_landmarks_on_image(rgb_image, detection_result):
     face_landmarks_list = detection_result.face_landmarks
     annotated_image = np.copy(rgb_image)
 
@@ -32,32 +32,47 @@ def draw_landmarks_on_image(rgb_image, detection_result):
         face_landmarks = face_landmarks_list[idx]
 
         # Draw the face landmarks.
+        drawing_utils.draw_landmarks(
+            image=annotated_image,
+            landmark_list=face_landmarks,
+            connections=vision.FaceLandmarksConnections.FACE_LANDMARKS_TESSELATION,
+            landmark_drawing_spec=None,
+            connection_drawing_spec=drawing_styles.get_default_face_mesh_tesselation_style())
+        drawing_utils.draw_landmarks(
+            image=annotated_image,
+            landmark_list=face_landmarks,
+            connections=vision.FaceLandmarksConnections.FACE_LANDMARKS_CONTOURS,
+            landmark_drawing_spec=None,
+            connection_drawing_spec=drawing_styles.get_default_face_mesh_contours_style())
+        drawing_utils.draw_landmarks(
+            image=annotated_image,
+            landmark_list=face_landmarks,
+            connections=vision.FaceLandmarksConnections.FACE_LANDMARKS_LEFT_IRIS,
+            landmark_drawing_spec=None,
+            connection_drawing_spec=drawing_styles.get_default_face_mesh_iris_connections_style())
+        drawing_utils.draw_landmarks(
+            image=annotated_image,
+            landmark_list=face_landmarks,
+            connections=vision.FaceLandmarksConnections.FACE_LANDMARKS_RIGHT_IRIS,
+            landmark_drawing_spec=None,
+            connection_drawing_spec=drawing_styles.get_default_face_mesh_iris_connections_style())
 
+    return annotated_image
 
-    drawing_utils.draw_landmarks(
-        image=annotated_image,
-        landmark_list=face_landmarks,
-        connections=vision.FaceLandmarksConnections.FACE_LANDMARKS_TESSELATION,
-        landmark_drawing_spec=None,
-        connection_drawing_spec=drawing_styles.get_default_face_mesh_tesselation_style())
-    drawing_utils.draw_landmarks(
-        image=annotated_image,
-        landmark_list=face_landmarks,
-        connections=vision.FaceLandmarksConnections.FACE_LANDMARKS_CONTOURS,
-        landmark_drawing_spec=None,
-        connection_drawing_spec=drawing_styles.get_default_face_mesh_contours_style())
-    drawing_utils.draw_landmarks(
-        image=annotated_image,
-        landmark_list=face_landmarks,
-        connections=vision.FaceLandmarksConnections.FACE_LANDMARKS_LEFT_IRIS,
-          landmark_drawing_spec=None,
-          connection_drawing_spec=drawing_styles.get_default_face_mesh_iris_connections_style())
-    drawing_utils.draw_landmarks(
-        image=annotated_image,
-        landmark_list=face_landmarks,
-        connections=vision.FaceLandmarksConnections.FACE_LANDMARKS_RIGHT_IRIS,
-          landmark_drawing_spec=None,
-          connection_drawing_spec=drawing_styles.get_default_face_mesh_iris_connections_style())
+def draw_pose_landmarks_on_image(rgb_image, detection_result):
+    pose_landmarks_list = detection_result.pose_landmarks
+    annotated_image = np.copy(rgb_image)
+
+    pose_landmark_style = drawing_styles.get_default_pose_landmarks_style()
+    pose_connection_style = drawing_utils.DrawingSpec(color=(0, 255, 0), thickness=2)
+
+    for pose_landmarks in pose_landmarks_list:
+        drawing_utils.draw_landmarks(
+            image=annotated_image,
+            landmark_list=pose_landmarks,
+            connections=vision.PoseLandmarksConnections.POSE_LANDMARKS,
+            landmark_drawing_spec=pose_landmark_style,
+            connection_drawing_spec=pose_connection_style)
 
     return annotated_image
 
@@ -83,15 +98,23 @@ def plot_face_blendshapes_bar_graph(face_blendshapes):
     plt.show()
 
 if __name__ == "__main__":
-    base_options = python.BaseOptions(model_asset_path='face_landmarker_v2_with_blendshapes.task')
-    options = vision.FaceLandmarkerOptions(base_options=base_options,
+    
+    # face mesh detector
+    face_base_options = python.BaseOptions(model_asset_path='face_landmarker_v2_with_blendshapes.task')
+    face_options = vision.FaceLandmarkerOptions(base_options=face_base_options,
                                         output_face_blendshapes=True,
                                         output_facial_transformation_matrixes=True,
                                         num_faces=1)
-    detector = vision.FaceLandmarker.create_from_options(options)
+    face_detector = vision.FaceLandmarker.create_from_options(face_options)
+
+    # pose detector
+    pose_base_options = python.BaseOptions(model_asset_path='pose_landmarker.task')
+    pose_options = vision.PoseLandmarkerOptions(
+        base_options=pose_base_options,
+        output_segmentation_masks=True)
+    pose_detector = vision.PoseLandmarker.create_from_options(pose_options)
 
     camera = cv2.VideoCapture(0)
-
     while camera.isOpened():
         ret, frame = camera.read()
 
@@ -101,10 +124,12 @@ if __name__ == "__main__":
         image_rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
         image = mp.Image(image_format=mp.ImageFormat.SRGB, data=image_rgb)
 
-        detection_result = detector.detect(image)
+        face_detection_result   = face_detector.detect(image)
+        pose_detection_results  = pose_detector.detect(image) 
 
         image_copy = np.copy(image.numpy_view())
-        annotated_image = draw_landmarks_on_image(image_copy, detection_result)
+        annotated_image = draw_face_landmarks_on_image(image_copy, face_detection_result)
+        annotated_image = draw_pose_landmarks_on_image(annotated_image, pose_detection_results)
         rgb_annotated_image = cv2.cvtColor(annotated_image, cv2.COLOR_BGR2RGB)
 
         cv2.imshow('mediapipe test', rgb_annotated_image)
