@@ -21,6 +21,7 @@ from mediapipe.tasks.python.vision import drawing_styles
 import numpy as np
 import matplotlib.pyplot as plt
 import cv2
+import time
 
 
 def draw_face_landmarks_on_image(rgb_image, detection_result):
@@ -115,7 +116,11 @@ if __name__ == "__main__":
     pose_detector = vision.PoseLandmarker.create_from_options(pose_options)
 
     camera = cv2.VideoCapture(0)
+
+    time_prev = time.time()
+    frame_counter = 0
     while camera.isOpened():
+        frame_counter += 1
         ret, frame = camera.read()
 
         if not ret:
@@ -135,4 +140,12 @@ if __name__ == "__main__":
         cv2.imshow('mediapipe test', rgb_annotated_image)
         if cv2.waitKey(10) & 0xFF == ord('q'):
             break
+
+        time_now = time.time()
+        time_diff = time_now - time_prev
+        if time_diff > 1:
+            print(f'FPS: {frame_counter}')
+            frame_counter = 0
+            time_prev = time.time()
+
 
