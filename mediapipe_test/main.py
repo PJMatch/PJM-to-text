@@ -64,14 +64,29 @@ def draw_pose_landmarks_on_image(rgb_image, detection_result):
     pose_landmarks_list = detection_result.pose_landmarks
     annotated_image = np.copy(rgb_image)
 
+    # filter out all connections that start or end under 10 (face points)
+    body_only_connections = [
+        conn for conn in vision.PoseLandmarksConnections.POSE_LANDMARKS
+        if conn.start > 10 and conn.end > 10
+    ]
+
     pose_landmark_style = drawing_styles.get_default_pose_landmarks_style()
     pose_connection_style = drawing_utils.DrawingSpec(color=(0, 255, 0), thickness=2)
 
+    class InvisibleLandmark:
+        visibility = 0.0
+
     for pose_landmarks in pose_landmarks_list:
+        
+        filtered_landmarks = [
+            InvisibleLandmark() if i <= 10 else lm 
+            for i, lm in enumerate(pose_landmarks)
+        ]
+
         drawing_utils.draw_landmarks(
             image=annotated_image,
-            landmark_list=pose_landmarks,
-            connections=vision.PoseLandmarksConnections.POSE_LANDMARKS,
+            landmark_list=filtered_landmarks,
+            connections=body_only_connections,
             landmark_drawing_spec=pose_landmark_style,
             connection_drawing_spec=pose_connection_style)
 
@@ -109,10 +124,10 @@ if __name__ == "__main__":
     face_detector = vision.FaceLandmarker.create_from_options(face_options)
 
     # pose detector
-    pose_base_options = python.BaseOptions(model_asset_path='pose_landmarker.task')
+    pose_base_options = python.BaseOptions(model_asset_path='pose_landmarker_lite.task')
     pose_options = vision.PoseLandmarkerOptions(
         base_options=pose_base_options,
-        output_segmentation_masks=True)
+        output_segmentation_masks=False)
     pose_detector = vision.PoseLandmarker.create_from_options(pose_options)
 
     camera = cv2.VideoCapture(0)
