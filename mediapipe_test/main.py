@@ -113,20 +113,36 @@ def plot_face_blendshapes_bar_graph(face_blendshapes):
     plt.tight_layout()
     plt.show()
 
+latest_face_result = None
+latest_pose_result = None
+
+def face_result_callback(result, output_image, timestamp_ms):
+    global latest_face_result
+    latest_face_result = result
+
+def pose_result_callback(result, output_image, timestamp_ms):
+    global latest_pose_result
+    latest_pose_result = result
+
 if __name__ == "__main__":
     
     # face mesh detector
     face_base_options = python.BaseOptions(model_asset_path='face_landmarker_v2_with_blendshapes.task')
-    face_options = vision.FaceLandmarkerOptions(base_options=face_base_options,
-                                        output_face_blendshapes=True,
-                                        output_facial_transformation_matrixes=True,
-                                        num_faces=1)
+    face_options = vision.FaceLandmarkerOptions(
+        base_options=face_base_options,
+        running_mode=vision.RunningMode.LIVE_STREAM,
+        result_callback=face_result_callback,
+        output_face_blendshapes=True,
+        output_facial_transformation_matrixes=True,
+        num_faces=1)
     face_detector = vision.FaceLandmarker.create_from_options(face_options)
 
     # pose detector
     pose_base_options = python.BaseOptions(model_asset_path='pose_landmarker_lite.task')
     pose_options = vision.PoseLandmarkerOptions(
         base_options=pose_base_options,
+        running_mode=vision.RunningMode.LIVE_STREAM,
+        result_callback=pose_result_callback,
         output_segmentation_masks=False)
     pose_detector = vision.PoseLandmarker.create_from_options(pose_options)
 
@@ -134,6 +150,8 @@ if __name__ == "__main__":
 
     time_prev = time.time()
     frame_counter = 0
+    last_timestamp_ms = 0
+
     while camera.isOpened():
         frame_counter += 1
         ret, frame = camera.read()
@@ -144,12 +162,22 @@ if __name__ == "__main__":
         image_rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
         image = mp.Image(image_format=mp.ImageFormat.SRGB, data=image_rgb)
 
-        face_detection_result   = face_detector.detect(image)
-        pose_detection_results  = pose_detector.detect(image) 
+        timestamp_ms = int(time.time() * 1000)
+        if timestamp_ms <= last_timestamp_ms:
+            timestamp_ms = last_timestamp_ms + 1
+        last_timestamp_ms = timestamp_ms
 
-        image_copy = np.copy(image.numpy_view())
-        annotated_image = draw_face_landmarks_on_image(image_copy, face_detection_result)
-        annotated_image = draw_pose_landmarks_on_image(annotated_image, pose_detection_results)
+        face_detector.detect_async(image, timestamp_ms)
+        pose_detector.detect_async(image, timestamp_ms) 
+
+        annotated_image = np.copy(image.numpy_view())
+        
+        if latest_face_result is not None and latest_face_result.face_landmarks:
+            annotated_image = draw_face_landmarks_on_image(annotated_image, latest_face_result)
+            
+        if latest_pose_result is not None and latest_pose_result.pose_landmarks:
+            annotated_image = draw_pose_landmarks_on_image(annotated_image, latest_pose_result)
+
         rgb_annotated_image = cv2.cvtColor(annotated_image, cv2.COLOR_BGR2RGB)
 
         cv2.imshow('mediapipe test', rgb_annotated_image)
@@ -163,4 +191,7 @@ if __name__ == "__main__":
             frame_counter = 0
             time_prev = time.time()
 
-
+    face_detector.close()
+    pose_detector.close()
+    camera.release()
+    cv2.destroyAllWindows()
