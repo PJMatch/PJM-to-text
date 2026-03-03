@@ -113,8 +113,46 @@ def plot_face_blendshapes_bar_graph(face_blendshapes):
     plt.tight_layout()
     plt.show()
 
-latest_face_result = None
-latest_pose_result = None
+mp_hands = mp.tasks.vision.HandLandmarksConnections
+mp_drawing = mp.tasks.vision.drawing_utils
+mp_drawing_styles = mp.tasks.vision.drawing_styles
+
+MARGIN = 10  # pixels
+FONT_SIZE = 1
+FONT_THICKNESS = 1
+HANDEDNESS_TEXT_COLOR = (88, 205, 54) # vibrant green
+
+def draw_hand_landmarks_on_image(rgb_image, detection_result):
+    hand_landmarks_list = detection_result.hand_landmarks
+    handedness_list = detection_result.handedness
+    annotated_image = np.copy(rgb_image)
+
+    # Loop through the detected hands to visualize.
+    for idx in range(len(hand_landmarks_list)):
+        hand_landmarks = hand_landmarks_list[idx]
+        handedness = handedness_list[idx]
+
+        # Draw the hand landmarks.
+        mp_drawing.draw_landmarks(
+        annotated_image,
+        hand_landmarks,
+        mp_hands.HAND_CONNECTIONS,
+        mp_drawing_styles.get_default_hand_landmarks_style(),
+        mp_drawing_styles.get_default_hand_connections_style())
+
+        # Get the top left corner of the detected hand's bounding box.
+        height, width, _ = annotated_image.shape
+        x_coordinates = [landmark.x for landmark in hand_landmarks]
+        y_coordinates = [landmark.y for landmark in hand_landmarks]
+        text_x = int(min(x_coordinates) * width)
+        text_y = int(min(y_coordinates) * height) - MARGIN
+
+        # Draw handedness (left or right hand) on the image.
+        cv2.putText(annotated_image, f"{handedness[0].category_name}",
+                    (text_x, text_y), cv2.FONT_HERSHEY_DUPLEX,
+                    FONT_SIZE, HANDEDNESS_TEXT_COLOR, FONT_THICKNESS, cv2.LINE_AA)
+
+    return annotated_image
 
 def face_result_callback(result, output_image, timestamp_ms):
     global latest_face_result
@@ -123,6 +161,14 @@ def face_result_callback(result, output_image, timestamp_ms):
 def pose_result_callback(result, output_image, timestamp_ms):
     global latest_pose_result
     latest_pose_result = result
+
+def hand_result_callback(result, output_image, timestamp_ms):
+    global latest_hand_result
+    latest_hand_result = result
+
+latest_face_result = None
+latest_pose_result = None
+latest_hand_result = None
 
 if __name__ == "__main__":
     
@@ -145,6 +191,15 @@ if __name__ == "__main__":
         result_callback=pose_result_callback,
         output_segmentation_masks=False)
     pose_detector = vision.PoseLandmarker.create_from_options(pose_options)
+
+    # hand landmakr detector
+    hand_base_options = python.BaseOptions(model_asset_path='hand_landmarker.task')
+    hand_options = vision.HandLandmarkerOptions(
+        base_options=hand_base_options,
+        running_mode=vision.RunningMode.LIVE_STREAM,
+        result_callback=hand_result_callback,
+        num_hands=2)
+    hand_detector = vision.HandLandmarker.create_from_options(hand_options)
 
     camera = cv2.VideoCapture(0)
 
@@ -169,6 +224,7 @@ if __name__ == "__main__":
 
         face_detector.detect_async(image, timestamp_ms)
         pose_detector.detect_async(image, timestamp_ms) 
+        hand_detector.detect_async(image, timestamp_ms)
 
         annotated_image = np.copy(image.numpy_view())
         
@@ -177,6 +233,9 @@ if __name__ == "__main__":
             
         if latest_pose_result is not None and latest_pose_result.pose_landmarks:
             annotated_image = draw_pose_landmarks_on_image(annotated_image, latest_pose_result)
+
+        if latest_hand_result is not None and latest_hand_result.hand_landmarks:
+            annotated_image = draw_hand_landmarks_on_image(annotated_image, latest_hand_result)
 
         rgb_annotated_image = cv2.cvtColor(annotated_image, cv2.COLOR_BGR2RGB)
 
