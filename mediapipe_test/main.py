@@ -153,7 +153,7 @@ if __name__ == "__main__":
         rgb_annotated_image = cv2.cvtColor(annotated_image, cv2.COLOR_BGR2RGB)
 
         cv2.imshow('mediapipe test', rgb_annotated_image)
-        if cv2.waitKey(10) & 0xFF == ord('q'):
+        if cv2.waitKey(1) & 0xFF == ord('q'):
             break
 
         time_now = time.time()
