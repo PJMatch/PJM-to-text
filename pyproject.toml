@@ -40,11 +40,14 @@ strict = false
 warn_return_any = true
 warn_unused_configs = true
 
+[tool.uv]
+package = false
+
 [[tool.mypy.overrides]]
 module = [
     "mediapipe.*",
+    "torch.*",
+    "cv2.*",
+    "matplotlib.*"
 ]
 ignore_missing_imports = true
-
-[tool.uv]
-package = false
