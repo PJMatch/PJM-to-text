@@ -170,8 +170,7 @@ latest_face_result = None
 latest_pose_result = None
 latest_hand_result = None
 
-if __name__ == "__main__":
-    
+def asynchronous_detect():
     # face mesh detector
     face_base_options = python.BaseOptions(model_asset_path='face_landmarker_v2_with_blendshapes.task')
     face_options = vision.FaceLandmarkerOptions(
@@ -212,7 +211,7 @@ if __name__ == "__main__":
         ret, frame = camera.read()
 
         if not ret:
-           break
+            break
 
         image_rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
         image = mp.Image(image_format=mp.ImageFormat.SRGB, data=image_rgb)
@@ -254,3 +253,85 @@ if __name__ == "__main__":
     pose_detector.close()
     camera.release()
     cv2.destroyAllWindows()
+
+def synchronous_detect():
+    face_base_options = python.BaseOptions(model_asset_path='face_landmarker_v2_with_blendshapes.task')
+    face_options = vision.FaceLandmarkerOptions(
+        base_options=face_base_options,
+        running_mode=vision.RunningMode.VIDEO,
+        output_face_blendshapes=True,
+        output_facial_transformation_matrixes=True,
+        num_faces=1)
+    face_detector = vision.FaceLandmarker.create_from_options(face_options)
+
+    pose_base_options = python.BaseOptions(model_asset_path='pose_landmarker_lite.task')
+    pose_options = vision.PoseLandmarkerOptions(
+        base_options=pose_base_options,
+        running_mode=vision.RunningMode.VIDEO,
+        output_segmentation_masks=False)
+    pose_detector = vision.PoseLandmarker.create_from_options(pose_options)
+
+    hand_base_options = python.BaseOptions(model_asset_path='hand_landmarker.task')
+    hand_options = vision.HandLandmarkerOptions(
+        base_options=hand_base_options,
+        running_mode=vision.RunningMode.VIDEO,
+        num_hands=2)
+    hand_detector = vision.HandLandmarker.create_from_options(hand_options)
+
+    camera = cv2.VideoCapture(0)
+
+    time_prev = time.time()
+    frame_counter = 0
+    last_timestamp_ms = 0
+
+    while camera.isOpened():
+        ret, frame = camera.read()
+        if not ret:
+            break
+
+        frame_counter += 1
+
+        image_rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
+        mp_image = mp.Image(image_format=mp.ImageFormat.SRGB, data=image_rgb)
+
+        timestamp_ms = int(time.time() * 1000)
+        if timestamp_ms <= last_timestamp_ms:
+            timestamp_ms = last_timestamp_ms + 1
+        last_timestamp_ms = timestamp_ms
+
+        face_result = face_detector.detect_for_video(mp_image, timestamp_ms)
+        pose_result = pose_detector.detect_for_video(mp_image, timestamp_ms) 
+        hand_result = hand_detector.detect_for_video(mp_image, timestamp_ms)
+
+        annotated_image = np.copy(mp_image.numpy_view())
+        
+        if face_result and face_result.face_landmarks:
+            annotated_image = draw_face_landmarks_on_image(annotated_image, face_result)
+            
+        if pose_result and pose_result.pose_landmarks:
+            annotated_image = draw_pose_landmarks_on_image(annotated_image, pose_result)
+
+        if hand_result and hand_result.hand_landmarks:
+            annotated_image = draw_hand_landmarks_on_image(annotated_image, hand_result)
+
+        bgr_annotated_image = cv2.cvtColor(annotated_image, cv2.COLOR_RGB2BGR)
+
+        cv2.imshow('mediapipe test', bgr_annotated_image)
+        if cv2.waitKey(1) & 0xFF == ord('q'):
+            break
+
+        time_now = time.time()
+        time_diff = time_now - time_prev
+        if time_diff > 1:
+            print(f'FPS: {frame_counter}')
+            frame_counter = 0
+            time_prev = time.time()
+
+    face_detector.close()
+    pose_detector.close()
+    hand_detector.close()
+    camera.release()
+    cv2.destroyAllWindows()
+
+if __name__ == "__main__":
+    synchronous_detect()
