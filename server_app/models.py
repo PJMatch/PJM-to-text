@@ -12,6 +12,7 @@ class File(Base):
     __tablename__ = "files"
     id: Mapped[int] = mapped_column(primary_key=True)
     name: Mapped[str] = mapped_column(String(255),unique=True, nullable=False)
+    path: Mapped[str] = mapped_column(String(500), nullable=False)
     is_processed: Mapped[bool] = mapped_column(Boolean, default=False)
     is_processing: Mapped[bool] = mapped_column(Boolean, default=False)
 
