@@ -1,0 +1,28 @@
+services:
+  db:
+    image: postgres:15-alpine
+    restart: always
+    environment:
+      POSTGRES_USER: hivelord
+      POSTGRES_PASSWORD: hivehivehive
+      POSTGRES_DB: hive_db
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    ports:
+      - "5432:5432"
+
+  server:
+    build: ./server_app
+    restart: always
+    depends_on:
+      - db
+    environment:
+      DATABASE_URL: postgresql://hivelord:hivehivehive@db:5432/hive_db
+      VIDEOS_DIR: /data/videos
+    volumes:
+      - ./dataset/videos:/data/videos:ro
+    ports:
+      - "8000:8000"
+
+volumes:
+  postgres_data:
