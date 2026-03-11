@@ -19,8 +19,10 @@ services:
     environment:
       DATABASE_URL: postgresql://hivelord:hivehivehive@db:5432/hive_db
       VIDEOS_DIR: /data/videos
+      EXTRACTED_DIR: /data/extracted
     volumes:
       - ./dataset/videos:/data/videos:ro
+      - ./dataset/extracted:/data/extracted
     ports:
       - "8000:8000"
 

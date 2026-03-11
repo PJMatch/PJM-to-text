@@ -1,14 +1,15 @@
-from fastapi import FastAPI,Depends, HTTPException
+from fastapi import FastAPI,Depends, HTTPException, UploadFile, File as FastAPIFile
 import uvicorn
 from database import Database
 from models import File, Task
 from sqlalchemy.orm import Session
 import os
 from fastapi.responses import FileResponse
+import shutil
 
 
 VIDEO_PATH = os.getenv("VIDEOS_DIR", "/data/videos")
-
+EXTRACTED_PATH = os.getenv("EXTRACTED_DIR", "/data/extracted")
 
 def create_app(db_url: str):
 
@@ -50,6 +51,35 @@ def create_app(db_url: str):
         media_type="video/mp4", 
         filename=task.file.name
     )
+
+    @app.post("/finish-task/{task_code}")
+    async def finish_task(
+        task_code: str, 
+        file: UploadFile = FastAPIFile(...),
+        session: Session = Depends(db.get_db)
+        ):
+
+        task = db.mark_task_as_completed(session, task_code)
+        if not task:
+            raise HTTPException(status_code=404, detail="error: task not found")
+        
+        video_file = task.file
+
+        extracted_filename = f"{video_file.name}.npy"
+
+        extracted_path = os.path.join(EXTRACTED_PATH, extracted_filename)
+
+        with open(extracted_path, "wb") as buffer:
+            shutil.copyfileobj(file.file, buffer)
+
+
+        session.commit()
+
+        return {
+            "status": "success",
+            "message": f"Task {task_code} finished, result saved as {extracted_filename}",
+            "total_processed": session.query(File).filter(File.is_processed == True).count()
+            }
 
     return app, db
 

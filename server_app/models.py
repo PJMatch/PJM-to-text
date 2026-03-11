@@ -1,8 +1,14 @@
 from datetime import datetime
+import enum
 from sqlalchemy import String,Boolean,ForeignKey,DateTime
 from sqlalchemy.sql import func
 from sqlalchemy.orm import DeclarativeBase,relationship,mapped_column,Mapped
 import uuid
+
+class TaskStatus(enum.Enum):
+    IN_PROGRESS = "in_progress"
+    SUCCESS = "success"
+    FAILED = "failed"
 
 class Base(DeclarativeBase):
     pass
@@ -15,7 +21,7 @@ class File(Base):
     path: Mapped[str] = mapped_column(String(500), nullable=False)
     is_processed: Mapped[bool] = mapped_column(Boolean, default=False)
     is_processing: Mapped[bool] = mapped_column(Boolean, default=False)
-
+    
     tasks: Mapped[list["Task"]] = relationship(back_populates="file")
 
     def __repr__(self):
@@ -37,6 +43,8 @@ class Task(Base):
     file: Mapped["File"] = relationship(back_populates="tasks")
 
     created_at: Mapped[datetime] = mapped_column(DateTime, default=func.now())
+
+    status: Mapped[TaskStatus] = mapped_column(default=TaskStatus.IN_PROGRESS)
 
     def __repr__(self):
         return f"Task(code={self.unique_code!r}, file_id={self.file_id})"
