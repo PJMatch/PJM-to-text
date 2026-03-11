@@ -1,0 +1,76 @@
+import torch
+import torch.nn as nn
+import torch.nn.functional as F
+import torch.optim as optim
+import numpy as np
+
+
+class OnlineCslrLstm(nn.Module):
+    def __init__(self, input_size, hidden_size, num_classes, num_layers=2):
+        super().__init__()
+
+        self.lstm = nn.LSTM(
+            input_size=input_size,
+            hidden_size=hidden_size,
+            num_layers=num_layers,
+            batch_first=True,
+            bidirectional=False,
+        )
+
+        self.fc = nn.Linear(hidden_size, num_classes)
+
+    def forward(self, x):
+        out, _ = self.lstm(x)
+        out = self.fc(out)
+        out = F.log_softmax(out, dim=2)
+        return out
+
+
+file_name = "31October_2009_Saturday_tagesschau-7151.npy"
+data = np.load(file_name)
+
+if data.ndim == 3:
+    data = data.reshape(data.shape[0], -1)
+
+num_frames = data.shape[0]
+input_features = data.shape[1]
+
+inputs = torch.tensor(data, dtype=torch.float32).unsqueeze(0)
+
+target = torch.tensor([15, 42, 128], dtype=torch.long)
+
+num_classes = 501
+
+model = OnlineCslrLstm(
+    input_size=input_features,
+    hidden_size=256,
+    num_classes=num_classes,
+)
+
+criterion = nn.CTCLoss(blank=0, zero_infinity=True)
+
+optimizer = optim.Adam(model.parameters(), lr=0.001)
+
+input_lengths = torch.tensor([num_frames], dtype=torch.long)
+target_lengths = torch.tensor([len(target)], dtype=torch.long)
+
+epochs = 50
+
+print("Starting training...\n")
+
+for epoch in range(epochs):
+    optimizer.zero_grad()
+
+    outputs = model(inputs)
+
+    outputs_ctc = outputs.permute(1, 0, 2)
+
+    loss = criterion(outputs_ctc, target, input_lengths, target_lengths)
+
+    loss.backward()
+
+    optimizer.step()
+
+    print(f"Epoch [{epoch + 1:02d}/{epochs}] | Loss: {loss.item():.4f}")
+
+print("\nTraining finished.")
