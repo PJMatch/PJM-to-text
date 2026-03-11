@@ -1,0 +1,69 @@
+import torch
+import torch.nn as nn
+import torch.nn.functional as F
+import numpy as np
+
+
+class OnlineCslrLstm(nn.Module):
+    def __init__(self, input_size, hidden_size, num_classes, num_layers=2):
+        super().__init__()
+
+        self.hidden_size = hidden_size
+        self.num_layers = num_layers
+
+        self.lstm = nn.LSTM(
+            input_size=input_size,
+            hidden_size=hidden_size,
+            num_layers=num_layers,
+            batch_first=True,
+            bidirectional=False,
+        )
+
+        self.fc = nn.Linear(hidden_size, num_classes)
+
+    def forward(self, x, hidden):
+        out, hidden = self.lstm(x, hidden)
+        out = self.fc(out)
+        out = F.log_softmax(out, dim=2)
+        return out, hidden
+
+    def init_hidden(self, batch_size=1):
+        h0 = torch.zeros(self.num_layers, batch_size, self.hidden_size)
+        c0 = torch.zeros(self.num_layers, batch_size, self.hidden_size)
+        return h0, c0
+
+
+file_name = "31October_2009_Saturday_tagesschau-7151.npy"
+data = np.load(file_name)
+
+if data.ndim == 3:
+    data = data.reshape(data.shape[0], -1)
+
+num_frames = data.shape[0]
+input_features = data.shape[1]
+
+model = OnlineCslrLstm(
+    input_size=input_features,
+    hidden_size=256,
+    num_classes=501,
+)
+
+model.eval()
+
+hidden_state = model.init_hidden(batch_size=1)
+
+print(f"Processing {num_frames} frames...\n")
+
+for i in range(num_frames):
+    frame = data[i, :]
+
+    x = torch.tensor(frame, dtype=torch.float32).unsqueeze(0).unsqueeze(0)
+
+    with torch.no_grad():
+        prediction, hidden_state = model(x, hidden_state)
+
+    predicted_word_index = torch.argmax(prediction, dim=2).item()
+
+    print(f"Frame {i + 1:03d} -> Predicted class: {predicted_word_index}")
+
+print("\nProcessing finished.")
