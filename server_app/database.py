@@ -82,14 +82,19 @@ class Database:
 
         return new_task
     
-    def mark_task_as_completed(self, session:Session, code: str):
-
+    def mark_task_as_completed(self, session: Session, code: str):
         task = session.query(Task).filter(Task.unique_code == code).first()
         if not task:
-            return None
-        
-        task.status= TaskStatus.SUCCESS
+            return None, "not_found"
+
+        if task.status != TaskStatus.IN_PROGRESS:
+            return None, "not_in_progress"
+
+        if task.file.is_processed or not task.file.is_processing:
+            return None, "invalid_file_state"
+
+        task.status = TaskStatus.SUCCESS
         task.file.is_processed = True
         task.file.is_processing = False
-        return task
+        return task, "ok"
 

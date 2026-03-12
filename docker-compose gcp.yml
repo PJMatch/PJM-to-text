@@ -8,8 +8,6 @@ services:
       POSTGRES_DB: hive_db
     volumes:
       - postgres_data:/var/lib/postgresql/data
-    ports:
-      - "5432:5432"
 
   server:
     build: ./server_app
@@ -18,11 +16,14 @@ services:
       - db
     environment:
       DATABASE_URL: postgresql://hivelord:hivehivehive@db:5432/hive_db
-      VIDEOS_DIR: /data/videos
-      EXTRACTED_DIR: /data/extracted
+      VIDEOS_DIR: /mnt/data/dataset/lsfb/videos
+      EXTRACTED_DIR: /mnt/data/dataset/lsfb/extracted
+      ZIP_OUTPUT_DIR: /mnt/data/dataset/lsfb/processing_result
+      SERVER_URL: http://34.118.102.249:8000
     volumes:
-      - ./dataset/videos:/data/videos:ro
-      - ./dataset/extracted:/data/extracted
+      - /mnt/data/dataset/lsfb/videos:/data/videos:ro
+      - /mnt/data/dataset/lsfb/extracted:/data/extracted
+      - /mnt/data/dataset/lsfb/processing_result:/data/processing_result
     ports:
       - "8000:8000"
 
