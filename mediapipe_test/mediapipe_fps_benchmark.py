@@ -24,7 +24,6 @@ import mediapipe as mp
 import numpy as np
 from mediapipe.tasks import python
 from mediapipe.tasks.python import vision
-from mediapipe.tasks.python.vision import drawing_styles, drawing_utils
 from mediapipe_detection import (
     draw_face_landmarks_on_image,
     draw_hand_landmarks_on_image,
