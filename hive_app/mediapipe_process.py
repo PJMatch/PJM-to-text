@@ -5,6 +5,7 @@ from mediapipe.tasks import python
 from mediapipe.tasks.python import vision
 import numpy as np
 import cv2
+from typing import Callable, Optional
 
 POSE_MODEL = 'pose_landmarker_lite.task'
 HAND_MODEL = 'hand_landmarker.task'
@@ -59,7 +60,7 @@ def extract_keypoints(pose_result, hand_result, face_result):
     return np.concatenate([pose_data, face_data, lh_data, rh_data])
 
 
-def process_video(path: str) -> np.ndarray:
+def process_video(path: str, progress_callback: Optional[Callable[[int, int], None]] = None) -> np.ndarray:
     """
     Processes a single video file and returns extracted keypoints as a NumPy array.
     Shape: (N_frames, 1659)
@@ -86,6 +87,7 @@ def process_video(path: str) -> np.ndarray:
 
     cap = cv2.VideoCapture(path)
     fps = cap.get(cv2.CAP_PROP_FPS) or 25
+    total_frames = int(cap.get(cv2.CAP_PROP_FRAME_COUNT) or 0)
     frame_idx = 0
     sequence_data = []
 
@@ -114,6 +116,9 @@ def process_video(path: str) -> np.ndarray:
             sequence_data.append(keypoints)
 
             frame_idx += 1
+
+            if progress_callback is not None:
+                progress_callback(frame_idx, total_frames)
     finally:
         cap.release()
         pose_detector.close()

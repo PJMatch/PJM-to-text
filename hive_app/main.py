@@ -1,19 +1,20 @@
+import argparse
 import io
 import os
 import tempfile
 import time
 from pathlib import Path
+from typing import Callable, Optional
 
 import numpy as np
 import requests
 
 from mediapipe_process import process_video
 
-SERVER = os.getenv("SERVER_URL", "http://localhost:8000")
-ANNOTATIONS_OUTPUT = Path(os.getenv("ANNOTATIONS_OUTPUT", "annotations.zip"))
-
-
-
+# SERVER = "http://34.118.102.249:8000"
+SERVER = "http://localhost:8000"
+ANNOTATIONS_OUTPUT = "keypoints.zip"
+DOWNLOAD_CHUNK_SIZE = 1024 * 1024
 
 def send_result_with_retry(server: str, task_code: str, buf: io.BytesIO, retries: int = 3) -> None:
     url = f"{server}/finish-task/{task_code}"
@@ -38,6 +39,56 @@ def send_result_with_retry(server: str, task_code: str, buf: io.BytesIO, retries
     raise RuntimeError(f"error upload failed - task {task_code}: {last_error}")
 
 
+def download_file_with_progress(url: str, output_path: str, timeout: int) -> None:
+    response = requests.get(url, stream=True, timeout=timeout)
+    response.raise_for_status()
+
+    total_size = int(response.headers.get("content-length", "0"))
+    downloaded = 0
+    last_percent = -1
+
+    with open(output_path, "wb") as output_file:
+        for chunk in response.iter_content(chunk_size=DOWNLOAD_CHUNK_SIZE):
+            if not chunk:
+                continue
+
+            output_file.write(chunk)
+            downloaded += len(chunk)
+
+            if total_size > 0:
+                percent = int((downloaded * 100) / total_size)
+                if percent >= last_percent + 5 or percent == 100:
+                    print(f"Downloading: {percent}% ({downloaded}/{total_size} bytes)", end="\r", flush=True)
+                    last_percent = percent
+
+    if total_size > 0:
+        print("Downloading: 100%", " " * 30)
+
+
+def build_process_progress_callback() -> Callable[[int, int], None]:
+    last_percent = -1
+    last_count_print = 0
+
+    def progress_callback(processed_frames: int, total_frames: int) -> None:
+        nonlocal last_percent, last_count_print
+
+        if total_frames > 0:
+            percent = int((processed_frames * 100) / total_frames)
+            if percent >= last_percent + 5 or percent == 100:
+                print(
+                    f"Processing: {percent}% ({processed_frames}/{total_frames} frames)",
+                    end="\r",
+                    flush=True,
+                )
+                last_percent = percent
+        else:
+            if processed_frames - last_count_print >= 100:
+                print(f"Processing: {processed_frames} frames", end="\r", flush=True)
+                last_count_print = processed_frames
+
+    return progress_callback
+
+
 def run_worker_loop() -> None:
     while True:
         # 1. Get task
@@ -54,21 +105,23 @@ def run_worker_loop() -> None:
         download_url = data["download_url"]
 
         # 2. Download video
-        download_response = requests.get(download_url, timeout=300)
-        download_response.raise_for_status()
-        video_bytes = download_response.content
-
         with tempfile.NamedTemporaryFile(suffix=".mp4", delete=False) as file_handle:
-            file_handle.write(video_bytes)
             tmp_path = file_handle.name
+
+        print(f"Task {task_code}: downloading video")
+        download_file_with_progress(download_url, tmp_path, timeout=300)
 
         try:
             # 3. Process to .npy
-            results = process_video(tmp_path)
+            print(f"Task {task_code}: processing video")
+            progress_callback = build_process_progress_callback()
+            results = process_video(tmp_path, progress_callback=progress_callback)
+            print("Processing: 100%", " " * 30)
 
             # 4. Send back
             buffer = io.BytesIO()
             np.save(buffer, results)
+            print(f"Task {task_code}: uploading result")
             send_result_with_retry(SERVER, task_code, buffer)
 
             print(f"Done: {task_code}")
@@ -81,53 +134,53 @@ def check_status() -> None:
     response = requests.get(f"{SERVER}/status", timeout=30)
     response.raise_for_status()
     data = response.json()
+    total = data.get('total',0)
     print("Server status:")
     print(f"  total: {data.get('total', 0)}")
     print(f"  processed: {data.get('processed', 0)}")
     print(f"  processing: {data.get('processing', 0)}")
     print(f"  pending: {data.get('pending', 0)}")
+    print(f"  % complete: {(data.get('processed',0)/total if total > 0 else 0)*100}%")
 
 
 def download_annotations() -> None:
-    response = requests.get(f"{SERVER}/download-annotations", timeout=600)
-    response.raise_for_status()
-
     ANNOTATIONS_OUTPUT.parent.mkdir(parents=True, exist_ok=True)
-    with open(ANNOTATIONS_OUTPUT, "wb") as out_file:
-        out_file.write(response.content)
+    print("Downloading annotations ZIP")
+    download_file_with_progress(f"{SERVER}/download-annotations", str(ANNOTATIONS_OUTPUT), timeout=600)
 
-    print(f"Saved annotations ZIP to {ANNOTATIONS_OUTPUT}")
+    print(f"Saved keypoints ZIP to {ANNOTATIONS_OUTPUT}")
 
 
-def menu() -> None:
-    while True:
-        print("\nChoose an option:")
-        print("1) Run worker loop")
-        print("2) Check server status")
-        print("3) Download annotations ZIP")
-        print("4) Exit")
-        choice = input("> ").strip()
+def run_mode(mode: str) -> None:
+    if mode == "worker":
+        run_worker_loop()
+    elif mode == "status":
+        check_status()
+    elif mode == "download":
+        download_annotations()
+    else:
+        raise ValueError(f"Unknown mode: {mode}")
 
-        try:
-            if choice == "1":
-                run_worker_loop()
-            elif choice == "2":
-                check_status()
-            elif choice == "3":
-                download_annotations()
-            elif choice == "4":
-                print("Bye")
-                return
-            else:
-                print("Unknown option, choose 1-4")
-        except requests.RequestException as exc:
-            print(f"Network error: {exc}")
-        except Exception as exc:
-            print(f"Error: {exc}")
+
+def parse_args() -> argparse.Namespace:
+    parser = argparse.ArgumentParser(description="Hive worker CLI")
+    parser.add_argument(
+        "--mode",
+        choices=["worker", "status", "download-annotations"],
+        required=True,
+        help="Run mode",
+    )
+    return parser.parse_args()
 
 
 def main() -> None:
-    menu()
+    args = parse_args()
+    try:
+        run_mode(args.mode)
+    except requests.RequestException as exc:
+        print(f"Network error: {exc}")
+    except Exception as exc:
+        print(f"Error: {exc}")
 
 if __name__ == "__main__":
     main()

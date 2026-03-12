@@ -16,9 +16,9 @@ services:
       - db
     environment:
       DATABASE_URL: postgresql://hivelord:hivehivehive@db:5432/hive_db
-      VIDEOS_DIR: /mnt/data/dataset/lsfb/videos
-      EXTRACTED_DIR: /mnt/data/dataset/lsfb/extracted
-      ZIP_OUTPUT_DIR: /mnt/data/dataset/lsfb/processing_result
+      VIDEOS_DIR: /data/videos
+      EXTRACTED_DIR: /data/extracted
+      ZIP_OUTPUT_DIR: /data/processing_result
       SERVER_URL: http://34.118.102.249:8000
     volumes:
       - /mnt/data/dataset/lsfb/videos:/data/videos:ro

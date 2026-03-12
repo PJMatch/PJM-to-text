@@ -8,7 +8,7 @@ from fastapi.responses import FileResponse
 from sqlalchemy.orm import Session
 
 from database import Database
-from models import File, Task
+from models import File, Task, TaskStatus
 
 
 VIDEO_PATH = os.getenv("VIDEOS_DIR", "/data/videos")
@@ -39,6 +39,24 @@ def create_app(db_url: str):
             "processed": processed,
             "processing": processing,
             "pending": pending,
+        }
+
+    @app.get("/tasks/in-progress")
+    async def get_in_progress_tasks(session: Session = Depends(db.get_db)):
+        tasks = session.query(Task).filter(Task.status == TaskStatus.IN_PROGRESS).order_by(Task.id).all()
+        return {
+            "count": len(tasks),
+            "task_ids": [task.id for task in tasks],
+            "tasks": [
+                {
+                    "id": task.id,
+                    "task_code": task.unique_code,
+                    "file_id": task.file_id,
+                    "file_name": task.file.name,
+                    "created_at": task.created_at.isoformat() if task.created_at else None,
+                }
+                for task in tasks
+            ],
         }
     ####################################################
 
@@ -107,6 +125,23 @@ def create_app(db_url: str):
         except Exception as exc:
             session.rollback()
             raise HTTPException(status_code=500, detail=f"error: failed to store result ({exc})")
+
+    @app.post("/cancel-task/{task_id}")
+    async def cancel_task(task_id: int, session: Session = Depends(db.get_db)):
+        task, state = db.cancel_task(session, task_id)
+        if state == "not_found":
+            raise HTTPException(status_code=404, detail="error: task not found")
+        if state == "not_in_progress":
+            raise HTTPException(status_code=409, detail="error: task is not active")
+
+        session.commit()
+        return {
+            "status": "canceled",
+            "task_id": task.id,
+            "task_code": task.unique_code,
+            "file_id": task.file_id,
+            "file_name": task.file.name,
+        }
     ###############################################################
 
     @app.get("/download-annotations")

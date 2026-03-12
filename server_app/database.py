@@ -83,7 +83,7 @@ class Database:
         return new_task
     
     def mark_task_as_completed(self, session: Session, code: str):
-        task = session.query(Task).filter(Task.unique_code == code).first()
+        task = session.query(Task).filter(Task.unique_code == code).with_for_update().first()
         if not task:
             return None, "not_found"
 
@@ -95,6 +95,18 @@ class Database:
 
         task.status = TaskStatus.SUCCESS
         task.file.is_processed = True
+        task.file.is_processing = False
+        return task, "ok"
+
+    def cancel_task(self, session: Session, task_id: int):
+        task = session.query(Task).filter(Task.id == task_id).with_for_update().first()
+        if not task:
+            return None, "not_found"
+
+        if task.status != TaskStatus.IN_PROGRESS:
+            return None, "not_in_progress"
+
+        task.status = TaskStatus.FAILED
         task.file.is_processing = False
         return task, "ok"
 
