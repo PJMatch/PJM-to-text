@@ -4,12 +4,10 @@ import time
 import numpy as np
 import os
 import io
+from mediapipe_process import process_video
 
 SERVER = "http://localhost:8000"
 
-
-def process_video(path: str):
-    return np.array([])
 
 
 while True:

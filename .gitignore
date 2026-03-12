@@ -2,3 +2,5 @@
 *.json
 *.zip
 *.npy
+*.task
+__pycache__

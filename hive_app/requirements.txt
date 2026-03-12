@@ -1,0 +1,4 @@
+requests
+numpy
+mediapipe
+opencv-python
