@@ -4,8 +4,8 @@ This module provides functions that allow detection and display of detected keyp
 using Mediapipe using it's Tasks API. The implementation tries to imitate the Mediapipe Holistic
 which at the time is not available in the new API.
 """
-# most of the code has been copied from the official mediapipe website and later only finetuned
-# for our usecase, source: https://ai.google.dev/edge/mediapipe/solutions/guide
+# most of the funcitions' code has been copied from the official mediapipe website and later only
+# finetuned for our usecase, source: https://ai.google.dev/edge/mediapipe/solutions/guide
 
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
@@ -20,6 +20,7 @@ which at the time is not available in the new API.
 # limitations under the License.
 
 import time
+from concurrent.futures import ThreadPoolExecutor
 
 import cv2
 import mediapipe as mp
@@ -336,6 +337,24 @@ def asynchronous_detect() -> None:
     cv2.destroyAllWindows()
 
 
+def get_hands_landmarks_from_pose(pose_result) -> list:
+    """Takes pose detection results and extracts hands only.
+
+    Args:
+        pose_result: Pose detection result from Mediapipe.
+
+    Returns:
+        list: List of Mediapipe's landmarks of only hands, order kept as original
+    """
+    pose_landmarks_list = pose_result.pose_landmarks
+    hand_locations = [15, 16, 17, 18, 19, 20, 21, 22]
+    hand_landmarks = []
+    for pose_landmarks in pose_landmarks_list:
+        hand_landmarks = [lm for i, lm in enumerate(pose_landmarks) if i in hand_locations]
+
+    return hand_landmarks
+
+
 def synchronous_detect():
     """Synchronously detects landmarks and draws them on device camera livestream.
 
@@ -377,12 +396,17 @@ def synchronous_detect():
     frame_counter = 0
     last_timestamp_ms = 0
 
+    feature_extractor_thread = ThreadPoolExecutor(max_workers=3)
+
     while camera.isOpened():
         ret, frame = camera.read()
         if not ret:
             break
 
         frame_counter += 1
+
+        # small_frame = cv2.resize(frame, (640, 480))
+        # downsized frame gives approx. 1-2 FPS improvement so for now useless
 
         image_rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
         mp_image = mp.Image(image_format=mp.ImageFormat.SRGB, data=image_rgb)
@@ -392,20 +416,25 @@ def synchronous_detect():
             timestamp_ms = last_timestamp_ms + 1
         last_timestamp_ms = timestamp_ms
 
-        face_result = face_detector.detect_for_video(mp_image, timestamp_ms)
-        pose_result = pose_detector.detect_for_video(mp_image, timestamp_ms)
-        hand_result = hand_detector.detect_for_video(mp_image, timestamp_ms)
+        future_face = feature_extractor_thread.submit(
+            face_detector.detect_for_video, mp_image, timestamp_ms
+        )
+        future_pose = feature_extractor_thread.submit(
+            pose_detector.detect_for_video, mp_image, timestamp_ms
+        )
+        future_hands = feature_extractor_thread.submit(
+            hand_detector.detect_for_video, mp_image, timestamp_ms
+        )
+
+        face_result = future_face.result()
+        pose_result = future_pose.result()
+        hand_result = future_hands.result()
 
         annotated_image = np.copy(mp_image.numpy_view())
 
-        if face_result and face_result.face_landmarks:
-            annotated_image = draw_face_landmarks_on_image(annotated_image, face_result)
-
-        if pose_result and pose_result.pose_landmarks:
-            annotated_image = draw_pose_landmarks_on_image(annotated_image, pose_result)
-
-        if hand_result and hand_result.hand_landmarks:
-            annotated_image = draw_hand_landmarks_on_image(annotated_image, hand_result)
+        annotated_image = draw_face_landmarks_on_image(annotated_image, face_result)
+        annotated_image = draw_pose_landmarks_on_image(annotated_image, pose_result)
+        annotated_image = draw_hand_landmarks_on_image(annotated_image, hand_result)
 
         bgr_annotated_image = cv2.cvtColor(annotated_image, cv2.COLOR_RGB2BGR)
 
