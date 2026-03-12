@@ -10,6 +10,13 @@ pip install -r hive_app/requirements.txt
 
 Installs worker requirements (`requests`, `numpy`, `mediapipe`, `opencv-python`).
 
+
+## 1,5. Goto hive_app directory
+
+```bash
+cd hive_app
+```
+
 ## 2. Run worker loop
 
 ```bash

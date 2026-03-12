@@ -11,8 +11,7 @@ import requests
 
 from mediapipe_process import process_video
 
-# SERVER = "http://34.118.102.249:8000"
-SERVER = "http://localhost:8000"
+SERVER = "http://34.118.102.249:8000"
 ANNOTATIONS_OUTPUT = "keypoints.zip"
 DOWNLOAD_CHUNK_SIZE = 1024 * 1024
 
