@@ -25,7 +25,7 @@ def send_result_with_retry(server: str, task_code: str, buf: io.BytesIO, retries
             response = requests.post(
                 url,
                 files={"file": ("result.npy", buf, "application/octet-stream")},
-                timeout=120,
+                timeout=1200,
             )
             response.raise_for_status()
             return
