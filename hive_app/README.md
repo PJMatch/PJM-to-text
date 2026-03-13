@@ -10,46 +10,51 @@ pip install -r hive_app/requirements.txt
 
 Installs worker requirements (`requests`, `numpy`, `mediapipe`, `opencv-python`).
 
-
-## 1,5. Goto hive_app directory
+## 2. Go to workdir
 
 ```bash
 cd hive_app
 ```
 
-## 2. Run worker loop
+## 3. Run worker loop
 
 ```bash
-python hive_app/main.py --mode worker
+python main.py --mode worker --pass PASSWORD
 ```
 
-Continuously fetches tasks, downloads video, processes frames, uploads `.npy`.
+## 4. Run multiple workers
 
-## 3. Run multiple worker processes
-
-Start worker in multiple terminals:
+Start workers in multiple terminals:
 
 ```bash
-python hive_app/main.py --mode worker
-python hive_app/main.py --mode worker
-python hive_app/main.py --mode worker
+python main.py --mode worker --pass PASSWORD
+python main.py --mode worker --pass PASSWORD
+python main.py --mode worker --pass PASSWORD
 ```
 
-Each process pulls different tasks and increases total throughput. Recommended 1 worker/ 2 CPU cores
+Each process pulls different tasks and increases total throughput.
+Recommended: about 1 worker per 2 CPU cores.
 
-## ad 1. Check server status
+## 5. Check server status
 
 ```bash
-python hive_app/main.py --mode status
+python main.py --mode status --pass PASSWORD
 ```
 
 Prints `total`, `processed`, `processing`, `pending`, and completion percent.
 
-## ad 2. Download keypoints ZIP
+## 6. Download keypoints ZIP
 
 ```bash
-python hive_app/main.py --mode download
+python main.py --mode download --pass PASSWORD
 ```
 
-Downloads ZIP from server to local `keypoints.zip`. Can be done only after extraction is finished.
+Downloads ZIP from server to local `keypoints.zip`.
+Works only after processing is finished.
+
+## Notes
+
+- Worker uses HTTPS endpoint configured in code (`https://hiveprocess.duckdns.org`).
+
+
 

@@ -161,7 +161,7 @@ def run_mode(mode: str, client: requests.Session) -> None:
         run_worker_loop(client)
     elif mode == "status":
         check_status(client)
-    elif mode == "download-annotations":
+    elif mode == "download":
         download_annotations(client)
     else:
         raise ValueError(f"Unknown mode: {mode}")
@@ -171,7 +171,7 @@ def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Hive worker CLI")
     parser.add_argument(
         "--mode",
-        choices=["worker", "status", "download-annotations"],
+        choices=["worker", "status", "download"],
         required=True,
         help="Run mode",
     )
