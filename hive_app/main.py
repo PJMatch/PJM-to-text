@@ -11,8 +11,8 @@ import requests
 
 from mediapipe_process import process_video
 
-SERVER = "http://34.118.102.249:8000"
-ANNOTATIONS_OUTPUT = "keypoints.zip"
+SERVER = "https://hiveprocess.duckdns.org"
+ANNOTATIONS_OUTPUT = Path("keypoints.zip")
 DOWNLOAD_CHUNK_SIZE = 1024 * 1024
 
 def send_result_with_retry(server: str, task_code: str, buf: io.BytesIO, retries: int = 3) -> None:
@@ -155,7 +155,7 @@ def run_mode(mode: str) -> None:
         run_worker_loop()
     elif mode == "status":
         check_status()
-    elif mode == "download":
+    elif mode == "download-annotations":
         download_annotations()
     else:
         raise ValueError(f"Unknown mode: {mode}")

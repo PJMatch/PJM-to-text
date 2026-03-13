@@ -19,13 +19,28 @@ services:
       VIDEOS_DIR: /data/videos
       EXTRACTED_DIR: /data/extracted
       ZIP_OUTPUT_DIR: /data/processing_result
-      SERVER_URL: http://34.118.102.249:8000
+      SERVER_URL: https://hiveprocess.duckdns.org
     volumes:
       - /mnt/data/dataset/lsfb/videos:/data/videos:ro
       - /mnt/data/dataset/lsfb/extracted:/data/extracted
       - /mnt/data/dataset/lsfb/processing_result:/data/processing_result
+    expose:
+      - "8000"
+
+  caddy:
+    image: caddy:2
+    restart: always
+    depends_on:
+      - server
     ports:
-      - "8000:8000"
+      - "80:80"
+      - "443:443"
+    volumes:
+      - ./Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy_data:/data
+      - caddy_config:/config
 
 volumes:
   postgres_data:
+  caddy_data:
+  caddy_config:
