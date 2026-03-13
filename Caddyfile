@@ -1,3 +1,6 @@
 hiveprocess.duckdns.org {
+    basicauth /*{
+        worker $2a$14$ecWrgg4/SkZJc2Oaeac30u6UB5eIKQlmnelKt9eMrkPZaFLUSLaEu
+    }
 reverse_proxy server:8000
 }

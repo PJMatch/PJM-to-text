@@ -15,14 +15,20 @@ SERVER = "https://hiveprocess.duckdns.org"
 ANNOTATIONS_OUTPUT = Path("keypoints.zip")
 DOWNLOAD_CHUNK_SIZE = 1024 * 1024
 
-def send_result_with_retry(server: str, task_code: str, buf: io.BytesIO, retries: int = 3) -> None:
+def send_result_with_retry(
+    client: requests.Session,
+    server: str,
+    task_code: str,
+    buf: io.BytesIO,
+    retries: int = 3,
+) -> None:
     url = f"{server}/finish-task/{task_code}"
     last_error = None
 
     for attempt in range(1, retries + 1):
         try:
             buf.seek(0)
-            response = requests.post(
+            response = client.post(
                 url,
                 files={"file": ("result.npy", buf, "application/octet-stream")},
                 timeout=1200,
@@ -38,8 +44,8 @@ def send_result_with_retry(server: str, task_code: str, buf: io.BytesIO, retries
     raise RuntimeError(f"error upload failed - task {task_code}: {last_error}")
 
 
-def download_file_with_progress(url: str, output_path: str, timeout: int) -> None:
-    response = requests.get(url, stream=True, timeout=timeout)
+def download_file_with_progress(client: requests.Session, url: str, output_path: str, timeout: int) -> None:
+    response = client.get(url, stream=True, timeout=timeout)
     response.raise_for_status()
 
     total_size = int(response.headers.get("content-length", "0"))
@@ -88,10 +94,10 @@ def build_process_progress_callback() -> Callable[[int, int], None]:
     return progress_callback
 
 
-def run_worker_loop() -> None:
+def run_worker_loop(client: requests.Session) -> None:
     while True:
         # 1. Get task
-        response = requests.post(f"{SERVER}/get-task", timeout=30)
+        response = client.post(f"{SERVER}/get-task", timeout=30)
         response.raise_for_status()
         data = response.json()
 
@@ -108,7 +114,7 @@ def run_worker_loop() -> None:
             tmp_path = file_handle.name
 
         print(f"Task {task_code}: downloading video")
-        download_file_with_progress(download_url, tmp_path, timeout=300)
+        download_file_with_progress(client, download_url, tmp_path, timeout=300)
 
         try:
             # 3. Process to .npy
@@ -121,7 +127,7 @@ def run_worker_loop() -> None:
             buffer = io.BytesIO()
             np.save(buffer, results)
             print(f"Task {task_code}: uploading result")
-            send_result_with_retry(SERVER, task_code, buffer)
+            send_result_with_retry(client, SERVER, task_code, buffer)
 
             print(f"Done: {task_code}")
         finally:
@@ -129,8 +135,8 @@ def run_worker_loop() -> None:
                 os.remove(tmp_path)
 
 
-def check_status() -> None:
-    response = requests.get(f"{SERVER}/status", timeout=30)
+def check_status(client: requests.Session) -> None:
+    response = client.get(f"{SERVER}/status", timeout=30)
     response.raise_for_status()
     data = response.json()
     total = data.get('total',0)
@@ -142,21 +148,21 @@ def check_status() -> None:
     print(f"  % complete: {(data.get('processed',0)/total if total > 0 else 0)*100}%")
 
 
-def download_annotations() -> None:
+def download_annotations(client: requests.Session) -> None:
     ANNOTATIONS_OUTPUT.parent.mkdir(parents=True, exist_ok=True)
     print("Downloading annotations ZIP")
-    download_file_with_progress(f"{SERVER}/download-annotations", str(ANNOTATIONS_OUTPUT), timeout=600)
+    download_file_with_progress(client, f"{SERVER}/download-annotations", str(ANNOTATIONS_OUTPUT), timeout=600)
 
     print(f"Saved keypoints ZIP to {ANNOTATIONS_OUTPUT}")
 
 
-def run_mode(mode: str) -> None:
+def run_mode(mode: str, client: requests.Session) -> None:
     if mode == "worker":
-        run_worker_loop()
+        run_worker_loop(client)
     elif mode == "status":
-        check_status()
+        check_status(client)
     elif mode == "download-annotations":
-        download_annotations()
+        download_annotations(client)
     else:
         raise ValueError(f"Unknown mode: {mode}")
 
@@ -169,13 +175,24 @@ def parse_args() -> argparse.Namespace:
         required=True,
         help="Run mode",
     )
+    parser.add_argument(
+        "--pass",
+        "--auth-pass",
+        dest="auth_pass",
+        default=os.getenv("WORKER_PASS", ""),
+        help="Basic Auth password (or set WORKER_PASS)",
+    )
     return parser.parse_args()
 
 
 def main() -> None:
     args = parse_args()
+    client = requests.Session()
+    if args.auth_pass:
+        client.auth = ("worker", args.auth_pass)
+
     try:
-        run_mode(args.mode)
+        run_mode(args.mode, client)
     except requests.RequestException as exc:
         print(f"Network error: {exc}")
     except Exception as exc:
