@@ -55,6 +55,4 @@ Works only after processing is finished.
 ## Notes
 
 - Worker uses HTTPS endpoint configured in code (`https://hiveprocess.duckdns.org`).
-
-
-
+- For long uploads, set `UPLOAD_TIMEOUT_SECONDS` (default: `7200`).

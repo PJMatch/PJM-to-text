@@ -14,6 +14,7 @@ from mediapipe_process import process_video
 SERVER = "https://hiveprocess.duckdns.org"
 ANNOTATIONS_OUTPUT = Path("keypoints.zip")
 DOWNLOAD_CHUNK_SIZE = 1024 * 1024
+UPLOAD_TIMEOUT_SECONDS = int(os.getenv("UPLOAD_TIMEOUT_SECONDS", "7200"))
 
 def send_result_with_retry(
     client: requests.Session,
@@ -31,7 +32,7 @@ def send_result_with_retry(
             response = client.post(
                 url,
                 files={"file": ("result.npy", buf, "application/octet-stream")},
-                timeout=1200,
+                timeout=(30, UPLOAD_TIMEOUT_SECONDS),
             )
             response.raise_for_status()
             return

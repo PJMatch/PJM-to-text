@@ -1,3 +1,5 @@
+import os
+
 from sqlalchemy import create_engine
 from sqlalchemy.orm import sessionmaker
 from models import Base, File, Task, TaskStatus
@@ -10,7 +12,19 @@ TASK_TIMEOUT_MINUTES = 180
 class Database:
     def __init__(self,url):
         try: 
-            self.engine = create_engine(url)
+            pool_size = int(os.getenv("DB_POOL_SIZE", "20"))
+            max_overflow = int(os.getenv("DB_MAX_OVERFLOW", "40"))
+            pool_timeout = int(os.getenv("DB_POOL_TIMEOUT", "60"))
+            pool_recycle = int(os.getenv("DB_POOL_RECYCLE", "1800"))
+
+            self.engine = create_engine(
+                url,
+                pool_size=pool_size,
+                max_overflow=max_overflow,
+                pool_timeout=pool_timeout,
+                pool_recycle=pool_recycle,
+                pool_pre_ping=True,
+            )
 
             with self.engine.connect() as connection:
                 print("db connected")
@@ -67,7 +81,7 @@ class Database:
         file_to_process = session.query(File).filter(
             File.is_processed == False,
             File.is_processing == False
-        ).with_for_update().first()
+        ).with_for_update(skip_locked=True).first()
 
         if not file_to_process:
             return None
@@ -81,6 +95,19 @@ class Database:
         session.flush()
 
         return new_task
+
+    def get_task_for_completion(self, session: Session, code: str):
+        task = session.query(Task).filter(Task.unique_code == code).first()
+        if not task:
+            return None, "not_found"
+
+        if task.status != TaskStatus.IN_PROGRESS:
+            return None, "not_in_progress"
+
+        if task.file.is_processed or not task.file.is_processing:
+            return None, "invalid_file_state"
+
+        return task, "ok"
     
     def mark_task_as_completed(self, session: Session, code: str):
         task = session.query(Task).filter(Task.unique_code == code).with_for_update().first()

@@ -95,36 +95,64 @@ def create_app(db_url: str):
     ######################################################
 
     @app.post("/finish-task/{task_code}")
-    async def finish_task(
+    def finish_task(
         task_code: str,
         file: UploadFile = FastAPIFile(...),
-        session: Session = Depends(db.get_db),
     ):
-        task, state = db.mark_task_as_completed(session, task_code)
+        precheck_session = db.get_db_session()
+        state = "not_found"
+        extracted_filename = ""
+
+        try:
+            task, state = db.get_task_for_completion(precheck_session, task_code)
+            if state == "ok":
+                extracted_filename = f"{task.file.name}.npy"
+        finally:
+            precheck_session.close()
+
         if state == "not_found":
             raise HTTPException(status_code=404, detail="error: task not found")
         if state in {"not_in_progress", "invalid_file_state"}:
             raise HTTPException(status_code=409, detail="error: task is not active")
 
-        try:
-            video_file = task.file
-            extracted_filename = f"{video_file.name}.npy"
-            extracted_path = os.path.join(EXTRACTED_PATH, extracted_filename)
+        extracted_path = os.path.join(EXTRACTED_PATH, extracted_filename)
+        tmp_path = f"{extracted_path}.part"
 
+        try:
             os.makedirs(EXTRACTED_PATH, exist_ok=True)
-            with open(extracted_path, "wb") as buffer:
+            with open(tmp_path, "wb") as buffer:
                 shutil.copyfileobj(file.file, buffer)
 
-            session.commit()
+            os.replace(tmp_path, extracted_path)
 
-            return {
-                "status": "success",
-                "message": f"Task {task_code} finished, result saved as {extracted_filename}",
-                "total_processed": session.query(File).filter(File.is_processed == True).count()
-            }
+            complete_session = db.get_db_session()
+            try:
+                completed_task, completed_state = db.mark_task_as_completed(complete_session, task_code)
+                if completed_state == "not_found":
+                    raise HTTPException(status_code=404, detail="error: task not found")
+                if completed_state in {"not_in_progress", "invalid_file_state"}:
+                    raise HTTPException(status_code=409, detail="error: task is not active")
+
+                complete_session.commit()
+
+                return {
+                    "status": "success",
+                    "message": f"Task {task_code} finished, result saved as {extracted_filename}",
+                    "total_processed": complete_session.query(File).filter(File.is_processed == True).count(),
+                }
+            except Exception:
+                complete_session.rollback()
+                raise
+            finally:
+                complete_session.close()
+        except HTTPException:
+            raise
         except Exception as exc:
-            session.rollback()
+            if os.path.exists(tmp_path):
+                os.remove(tmp_path)
             raise HTTPException(status_code=500, detail=f"error: failed to store result ({exc})")
+        finally:
+            file.file.close()
 
     @app.post("/cancel-task/{task_id}")
     async def cancel_task(task_id: int, session: Session = Depends(db.get_db)):
