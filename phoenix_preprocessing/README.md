@@ -18,3 +18,6 @@ Values represent normalized X, Y, Z spatial coordinates.
 99 to 1532 (1434 values) Face: 478 facial and iris landmarks.
 1533 to 1595 (63 values) Left Hand: 21 joint landmarks.
 1596 to 1658 (63 values) Right Hand: 21 joint landmarks.
+
+You can find the extracted dataset here:
+https://drive.google.com/drive/folders/1gqOBRRVJk1FILYV09y9bxQuxtuoWvaVO
