@@ -19,11 +19,10 @@ class PhoenixDataset(Dataset):
 
     def __getitem__(self, idx):
         file_path = self.file_paths[idx]
-        sequence = np.load(file_path)
-        
-        #Convertting npy array to floatTensor
-        #result = (Sequence_Length, 1659)
-        return torch.FloatTensor(sequence)
+        sequence = np.load(file_path)              # (T, 1659)
+        sequence = torch.tensor(sequence, dtype=torch.float32)
+        sequence = sequence.reshape(sequence.shape[0], 553, 3)   # (T, 553, 3)
+        return sequence
 
 #Function to pad variable-length sequences in a batch.
 
