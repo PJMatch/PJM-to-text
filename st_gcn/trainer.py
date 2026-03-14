@@ -1,4 +1,6 @@
-import torch
-import torch.nn as nn
+"""Trainer module."""
 
-from models.stgcn.models import STGCNGraphConv as STGCN
+# import torch
+# import torch.nn as nn
+
+# from models.stgcn.models import STGCNGraphConv as STGCN
