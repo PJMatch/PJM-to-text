@@ -26,6 +26,10 @@ dev = [
 target-version = "py310"
 line-length = 100
 
+extend-exclude = [
+    "models/stgcn",
+]
+
 [tool.ruff.lint]
 select = ["E", "F", "I", "D"]
 
