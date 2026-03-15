@@ -8,6 +8,7 @@ class STGCNGroupEncoder(nn.Module):
     """
     Placeholder for a real group-specific ST-GCN encoder.
     """
+
     def __init__(self, num_nodes, in_channels, out_dim, dropout=0.2, name="group"):
         super().__init__()
         self.num_nodes = num_nodes
@@ -41,6 +42,7 @@ class FusionModule(nn.Module):
     """
     Fuses group-wise features into one frame-wise feature vector.
     """
+
     def __init__(self, in_dim, out_dim, dropout=0.2):
         super().__init__()
         self.net = nn.Sequential(
@@ -63,6 +65,7 @@ class TemporalConvBlock(nn.Module):
     Local temporal aggregation over frame-wise features.
     Input/Output: (B, T, D)
     """
+
     def __init__(self, dim, kernel_size=5, dropout=0.2):
         super().__init__()
         assert kernel_size % 2 == 1
@@ -82,9 +85,9 @@ class TemporalConvBlock(nn.Module):
 
     def forward(self, x, mask=None):
         residual = x
-        x = x.transpose(1, 2)       # (B, D, T)
+        x = x.transpose(1, 2)  # (B, D, T)
         x = self.net(x)
-        x = x.transpose(1, 2)       # (B, T, D)
+        x = x.transpose(1, 2)  # (B, T, D)
         x = self.relu(x + residual)
 
         if mask is not None:
@@ -98,6 +101,7 @@ class ContextualModule(nn.Module):
     CoSign-like contextual stage:
     1D temporal CNN -> UniLSTM
     """
+
     def __init__(
         self,
         feature_dim,
@@ -109,10 +113,12 @@ class ContextualModule(nn.Module):
     ):
         super().__init__()
 
-        self.temporal_blocks = nn.ModuleList([
-            TemporalConvBlock(feature_dim, kernel_size=temporal_kernel, dropout=dropout)
-            for _ in range(temporal_layers)
-        ])
+        self.temporal_blocks = nn.ModuleList(
+            [
+                TemporalConvBlock(feature_dim, kernel_size=temporal_kernel, dropout=dropout)
+                for _ in range(temporal_layers)
+            ]
+        )
 
         self.lstm = nn.LSTM(
             input_size=feature_dim,
@@ -162,6 +168,7 @@ class GlossHead(nn.Module):
     """
     Maps contextual features to gloss logits for CTC.
     """
+
     def __init__(self, in_dim, num_classes, dropout=0.2, blank_in_vocab=False):
         super().__init__()
         out_classes = num_classes if blank_in_vocab else num_classes + 1
@@ -187,6 +194,7 @@ class OfflineCSLR(nn.Module):
     Input:  (B, T, 553, 3)
     Output: log_probs (B, T_out, C), output_lengths (B,)
     """
+
     def __init__(
         self,
         num_classes,
