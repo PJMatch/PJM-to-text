@@ -11,7 +11,7 @@ import requests
 
 from mediapipe_process import process_video
 
-SERVER = "https://hiveprocess.duckdns.org"
+SERVER = os.getenv("SERVER_URL", "https://hiveprocess.duckdns.org")
 KEYPOINTS_OUTPUT = Path("keypoints.zip")
 DOWNLOAD_CHUNK_SIZE = 1024 * 1024
 UPLOAD_TIMEOUT_SECONDS = int(os.getenv("UPLOAD_TIMEOUT_SECONDS", "7200"))
