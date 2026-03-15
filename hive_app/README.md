@@ -51,8 +51,34 @@ python main.py --mode download --pass PASSWORD
 
 Downloads ZIP from server to local `keypoints.zip`.
 Works only after processing is finished.
+Uses backend endpoint: `GET /download-keypoints`.
 
 ## Notes
 
 - Worker uses HTTPS endpoint configured in code (`https://hiveprocess.duckdns.org`).
-- For long uploads, set `UPLOAD_TIMEOUT_SECONDS` (default: `7200`).
+
+## Backend file browser API
+
+You can now list all backend files and download a selected file.
+
+### List all files
+
+```bash
+GET /files
+```
+
+Response includes:
+
+- `id`
+- `name`
+- `is_processed`
+- `is_processing`
+- `has_keypoints`
+
+### Download selected keypoints (.npy)
+
+```bash
+GET /files/{file_id}/download-keypoints
+```
+
+Returns `404` if file does not exist.

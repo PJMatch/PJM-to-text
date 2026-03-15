@@ -15,7 +15,10 @@ VIDEO_PATH = os.getenv("VIDEOS_DIR", "/data/videos")
 EXTRACTED_PATH = os.getenv("EXTRACTED_DIR", "/data/extracted")
 ZIP_OUTPUT_PATH = os.getenv("ZIP_OUTPUT_DIR", "/data/processing_result")
 SERVER_URL = os.getenv("SERVER_URL", "http://localhost:8000")
-ANNOTATIONS_ZIP_NAME = os.getenv("ANNOTATIONS_ZIP_NAME", "annotations_final.zip")
+KEYPOINTS_ZIP_NAME = os.getenv(
+    "KEYPOINTS_ZIP_NAME",
+    os.getenv("ANNOTATIONS_ZIP_NAME", "keypoints_final.zip"),
+)
 
 
 def create_app(db_url: str):
@@ -58,6 +61,40 @@ def create_app(db_url: str):
                 for task in tasks
             ],
         }
+
+    @app.get("/files")
+    async def list_files(session: Session = Depends(db.get_db)):
+        files = session.query(File).order_by(File.id).all()
+        return {
+            "count": len(files),
+            "files": [
+                {
+                    "id": file.id,
+                    "name": file.name,
+                    "is_processed": file.is_processed,
+                    "is_processing": file.is_processing,
+                    "has_keypoints": os.path.exists(os.path.join(EXTRACTED_PATH, f"{file.name}.npy")),
+                }
+                for file in files
+            ],
+        }
+
+    @app.get("/files/{file_id}/download-keypoints")
+    async def download_keypoints_file(file_id: int, session: Session = Depends(db.get_db)):
+        file_record = session.query(File).filter(File.id == file_id).first()
+
+        if not file_record:
+            raise HTTPException(status_code=404, detail="error: file not found")
+
+        keypoints_path = os.path.join(EXTRACTED_PATH, f"{file_record.name}.npy")
+        if not os.path.exists(keypoints_path):
+            raise HTTPException(status_code=404, detail="error: keypoints file not found")
+
+        return FileResponse(
+            path=keypoints_path,
+            media_type="application/octet-stream",
+            filename=f"{file_record.name}.npy",
+        )
     ####################################################
 
     @app.post("/get-task")
@@ -172,8 +209,8 @@ def create_app(db_url: str):
         }
     ###############################################################
 
-    @app.get("/download-annotations")
-    async def download_annotations(session: Session = Depends(db.get_db)):
+    @app.get("/download-keypoints")
+    async def download_keypoints(session: Session = Depends(db.get_db)):
         total = session.query(File).count()
         processed = session.query(File).filter(File.is_processed == True).count()
 
@@ -191,9 +228,9 @@ def create_app(db_url: str):
 
         npy_files = [f for f in os.listdir(EXTRACTED_PATH) if f.endswith(".npy")]
         if not npy_files:
-            raise HTTPException(status_code=404, detail="error: no annotation files found")
+            raise HTTPException(status_code=404, detail="error: no keypoints files found")
 
-        zip_path = os.path.join(ZIP_OUTPUT_PATH, ANNOTATIONS_ZIP_NAME)
+        zip_path = os.path.join(ZIP_OUTPUT_PATH, KEYPOINTS_ZIP_NAME)
 
         if not os.path.exists(zip_path):
             with zipfile.ZipFile(zip_path, "w", compression=zipfile.ZIP_DEFLATED) as zipf:
@@ -204,7 +241,7 @@ def create_app(db_url: str):
         return FileResponse(
             path=zip_path,
             media_type="application/zip",
-            filename=ANNOTATIONS_ZIP_NAME,
+            filename=KEYPOINTS_ZIP_NAME,
         )
 
     return app, db

@@ -12,7 +12,7 @@ import requests
 from mediapipe_process import process_video
 
 SERVER = "https://hiveprocess.duckdns.org"
-ANNOTATIONS_OUTPUT = Path("keypoints.zip")
+KEYPOINTS_OUTPUT = Path("keypoints.zip")
 DOWNLOAD_CHUNK_SIZE = 1024 * 1024
 UPLOAD_TIMEOUT_SECONDS = int(os.getenv("UPLOAD_TIMEOUT_SECONDS", "7200"))
 
@@ -149,12 +149,12 @@ def check_status(client: requests.Session) -> None:
     print(f"  % complete: {(data.get('processed',0)/total if total > 0 else 0)*100}%")
 
 
-def download_annotations(client: requests.Session) -> None:
-    ANNOTATIONS_OUTPUT.parent.mkdir(parents=True, exist_ok=True)
-    print("Downloading annotations ZIP")
-    download_file_with_progress(client, f"{SERVER}/download-annotations", str(ANNOTATIONS_OUTPUT), timeout=600)
+def download_keypoints(client: requests.Session) -> None:
+    KEYPOINTS_OUTPUT.parent.mkdir(parents=True, exist_ok=True)
+    print("Downloading keypoints ZIP")
+    download_file_with_progress(client, f"{SERVER}/download-keypoints", str(KEYPOINTS_OUTPUT), timeout=600)
 
-    print(f"Saved keypoints ZIP to {ANNOTATIONS_OUTPUT}")
+    print(f"Saved keypoints ZIP to {KEYPOINTS_OUTPUT}")
 
 
 def run_mode(mode: str, client: requests.Session) -> None:
@@ -163,7 +163,7 @@ def run_mode(mode: str, client: requests.Session) -> None:
     elif mode == "status":
         check_status(client)
     elif mode == "download":
-        download_annotations(client)
+        download_keypoints(client)
     else:
         raise ValueError(f"Unknown mode: {mode}")
 
