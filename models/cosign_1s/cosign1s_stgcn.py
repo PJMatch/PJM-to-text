@@ -120,6 +120,7 @@ class STGCNCoSign1s(nn.Module):
             "hands": 21,
         }
 
+        # fmt: off
         # TODO: Need to actually check project's indexing schema
         self.group_indices = {
             "body": list(range(0, 33)),
@@ -127,28 +128,11 @@ class STGCNCoSign1s(nn.Module):
             "l_hand": list(range(511, 532)),
             "r_hand": list(range(532, 553)),
             "mouth": [
-                0,
-                267,
-                269,
-                270,
-                409,
-                306,
-                375,
-                321,
-                405,
-                314,
-                17,
-                84,
-                181,
-                91,
-                146,
-                61,
-                185,
-                40,
-                39,
-                37,
+                0, 267, 269, 270, 409, 306, 185, 40, 39, 37, # upper lip
+                375, 321, 405, 314, 17, 84, 181, 91, 146, 61, # lower lip
             ],
         }
+        # fmt: on
 
         self.gcn_modules = nn.ModuleDict(
             {
