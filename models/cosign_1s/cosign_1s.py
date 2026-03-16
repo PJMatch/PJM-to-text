@@ -220,7 +220,4 @@ class CoSign1s(nn.Module):
         v = v.permute(0, 2, 1)
         v_fused = self.fusion_mlp(v)
 
-        # [B, fusion_out_dim, T] -> [B, T, fusion_out_dim]
-        v_fused = v_fused.permute(0, 2, 1)
-
         return v_fused
