@@ -106,7 +106,7 @@ class STGCNGraphConv(nn.Module):
     def __init__(self, args, blocks, n_vertex):
         super(STGCNGraphConv, self).__init__()
         modules = []
-        for l in range(len(blocks) - 3):
+        for l in range(len(blocks) - 1):
             modules.append(
                 layers.STConvBlock(
                     args.Kt,
@@ -122,28 +122,31 @@ class STGCNGraphConv(nn.Module):
                 )
             )
         self.st_blocks = nn.Sequential(*modules)
-        Ko = args.n_his - (len(blocks) - 3) * 2 * (args.Kt - 1)
-        self.Ko = Ko
-        if self.Ko > 1:
-            self.output = layers.OutputBlock(
-                Ko,
-                blocks[-3][-1],
-                blocks[-2],
-                blocks[-1][0],
-                n_vertex,
-                args.act_func,
-                args.enable_bias,
-                args.droprate,
-            )
-        elif self.Ko == 0:
-            self.fc1 = nn.Linear(
-                in_features=blocks[-3][-1], out_features=blocks[-2][0], bias=args.enable_bias
-            )
-            self.fc2 = nn.Linear(
-                in_features=blocks[-2][0], out_features=blocks[-1][0], bias=args.enable_bias
-            )
-            self.relu = nn.ReLU()
-            self.do = nn.Dropout(p=args.droprate)
+        
+        # rest is unnecessary since we don't use the output classification layers
+
+        # Ko = args.n_his - (len(blocks) - 3) * 2 * (args.Kt - 1)
+        # self.Ko = Ko
+        # if self.Ko > 1:
+        #     self.output = layers.OutputBlock(
+        #         Ko,
+        #         blocks[-3][-1],
+        #         blocks[-2],
+        #         blocks[-1][0],
+        #         n_vertex,
+        #         args.act_func,
+        #         args.enable_bias,
+        #         args.droprate,
+        #     )
+        # elif self.Ko == 0:
+        #     self.fc1 = nn.Linear(
+        #         in_features=blocks[-3][-1], out_features=blocks[-2][0], bias=args.enable_bias
+        #     )
+        #     self.fc2 = nn.Linear(
+        #         in_features=blocks[-2][0], out_features=blocks[-1][0], bias=args.enable_bias
+        #     )
+        #     self.relu = nn.ReLU()
+        #     self.do = nn.Dropout(p=args.droprate)
 
     def forward(self, x):
         x = self.st_blocks(x)

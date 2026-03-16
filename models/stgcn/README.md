@@ -13,4 +13,5 @@ The original license file is preserved in this directory as `LICENSE`.
 1. Converted imports to relative imports for compatibility.
 2. Changed default values of *enable_padding* in CausalConv1d and CausalConv2d to *True* 
 3. Commented out the output computation block in *forward* of STGCNGraphConv for CSLR purposes
-*in progres*
+4. Commented out the output layers configuration in the constructor of STGCNGraphConv
+5. Changed the for loop range in the constructor of STGCNGraphConv (we don't use the output layers so we want the *blocks* argument to not be forced to include such layers)
