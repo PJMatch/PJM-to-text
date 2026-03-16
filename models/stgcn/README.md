@@ -11,4 +11,6 @@ The original license file is preserved in this directory as `LICENSE`.
 
 ## Modifications
 1. Converted imports to relative imports for compatibility.
+2. Changed default values of *enable_padding* in CausalConv1d and CausalConv2d to *True* 
+3. Commented out the output computation block in *forward* of STGCNGraphConv for CSLR purposes
 *in progres*

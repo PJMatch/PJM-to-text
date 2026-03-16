@@ -147,11 +147,14 @@ class STGCNGraphConv(nn.Module):
 
     def forward(self, x):
         x = self.st_blocks(x)
-        if self.Ko > 1:
-            x = self.output(x)
-        elif self.Ko == 0:
-            x = self.fc1(x.permute(0, 2, 3, 1))
-            x = self.relu(x)
-            x = self.fc2(x).permute(0, 3, 1, 2)
+        # THIS BLOCK NEEDS TO STAY COMMENTED OUT
+        # {
+        # if self.Ko > 1:
+        #     x = self.output(x)
+        # elif self.Ko == 0:
+        #     x = self.fc1(x.permute(0, 2, 3, 1))
+        #     x = self.relu(x)
+        #     x = self.fc2(x).permute(0, 3, 1, 2)
+        # }
 
         return x

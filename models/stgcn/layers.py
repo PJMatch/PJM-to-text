@@ -23,7 +23,7 @@ class Align(nn.Module):
         return x
 
 class CausalConv1d(nn.Conv1d):
-    def __init__(self, in_channels, out_channels, kernel_size, stride=1, enable_padding=False, dilation=1, groups=1, bias=True):
+    def __init__(self, in_channels, out_channels, kernel_size, stride=1, enable_padding=True, dilation=1, groups=1, bias=True):
         if enable_padding == True:
             self.__padding = (kernel_size - 1) * dilation
         else:
@@ -38,7 +38,7 @@ class CausalConv1d(nn.Conv1d):
         return result
 
 class CausalConv2d(nn.Conv2d):
-    def __init__(self, in_channels, out_channels, kernel_size, stride=1, enable_padding=False, dilation=1, groups=1, bias=True):
+    def __init__(self, in_channels, out_channels, kernel_size, stride=1, enable_padding=True, dilation=1, groups=1, bias=True):
         kernel_size = nn.modules.utils._pair(kernel_size)
         stride = nn.modules.utils._pair(stride)
         dilation = nn.modules.utils._pair(dilation)
@@ -77,9 +77,9 @@ class TemporalConvLayer(nn.Module):
         self.n_vertex = n_vertex
         self.align = Align(c_in, c_out)
         if act_func == 'glu' or act_func == 'gtu':
-            self.causal_conv = CausalConv2d(in_channels=c_in, out_channels=2 * c_out, kernel_size=(Kt, 1), enable_padding=False, dilation=1)
+            self.causal_conv = CausalConv2d(in_channels=c_in, out_channels=2 * c_out, kernel_size=(Kt, 1), enable_padding=True, dilation=1)
         else:
-            self.causal_conv = CausalConv2d(in_channels=c_in, out_channels=c_out, kernel_size=(Kt, 1), enable_padding=False, dilation=1)
+            self.causal_conv = CausalConv2d(in_channels=c_in, out_channels=c_out, kernel_size=(Kt, 1), enable_padding=True, dilation=1)
         self.relu = nn.ReLU()
         self.silu = nn.SiLU()
         self.act_func = act_func
