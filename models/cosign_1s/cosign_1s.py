@@ -88,8 +88,8 @@ mouth_args = STGCNArgs(
 )
 
 
-class CoSign1s(nn.Module):
-    """CoSign-1s implementation.
+class STGCNCoSign1s(nn.Module):
+    """CoSign-1s' ST-GCN implementation.
 
     Based on:
     @InProceedings{Jiao_2023_ICCV,
@@ -106,7 +106,7 @@ class CoSign1s(nn.Module):
     """
 
     def __init__(self):
-        """CoSign-1s constructor."""
+        """CoSign1s ST-GCN's constructor."""
         super().__init__()
 
         self.gcn_out_dim = cs_blocks[-1][-1]
@@ -171,7 +171,7 @@ class CoSign1s(nn.Module):
         )  # TODO: in CoSign paper they say smth about Bernouli distribution for dropout - eqn. (4)
 
     def forward(self, x):
-        """Forward function of CoSign1s.
+        """Forward function of CoSign1s ST-GCN.
 
         Args:
             x :[Batch, Channels, Timesteps, Vertices] -> [B, 3, T, 553 (or less)]
