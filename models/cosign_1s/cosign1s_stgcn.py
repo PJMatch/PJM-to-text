@@ -1,5 +1,6 @@
 """This module contains code for our implementation of 1-stream CoSign architecture."""
 
+import numpy as np
 import torch
 import torch.nn as nn
 
@@ -64,28 +65,13 @@ class STGCNCoSign1s(nn.Module):
         # TODO: check the actual LSTM input size and put it here
         self.fusion_out_dim = 512  # this needs to be the size of LSTM input
 
-        # v_counts = {
-        #     "face": 478,
-        #     "mouth": 8,
-        #     "body": 33,
-        #     "hands": 21,
-        # }
-
-        # fmt: off
-        # TODO: Need to actually check project's indexing schema
-        # group_indices_npy = {
-        #     "body": list(range(0, 33)),
-        #     "face": list(range(33, 511)),
-        #     "l_hand": list(range(511, 532)),
-        #     "r_hand": list(range(532, 553)),
-        #     "mouth": [
-        #         0, 267, 269, 270, 409, 306, 185, 40, 39, 37, # upper lip
-        #         375, 321, 405, 314, 17, 84, 181, 91, 146, 61, # lower lip
-        #     ],
-        # }
-        # fmt: on
-
-        # self.group_indices = group_indices_npy  # not a bug - want it to be reference and not a copy
+        self.offsets = {
+            "body": 0,
+            "face": 33,
+            "mouth": 33,  # mouth is part of the face detection so the same offset
+            "l_hand": 511,
+            "r_hand": 532,
+        }
 
         self.gcn_modules = nn.ModuleDict(
             {
@@ -117,7 +103,7 @@ class STGCNCoSign1s(nn.Module):
         self.fusion_in_dim = num_groups_for_fusion * self.gcn_out_dim
 
         self.fusion_mlp = nn.Sequential(
-            nn.Linear(self.fusion_in_dim, self.fusion_out_dim),
+            nn.Conv1d(self.fusion_in_dim, self.fusion_out_dim, kernel_size=1),
             nn.BatchNorm1d(self.fusion_out_dim),
             nn.ReLU(),
             nn.Dropout(p=0.2),
@@ -135,12 +121,15 @@ class STGCNCoSign1s(nn.Module):
         """
         centralized_groups = {}
         for name in ["body", "face", "mouth", "l_hand", "r_hand"]:
-            indices = self.config[name]
-            group_data = x[:, :, :, indices]  # [B, 3, T, V_local]
+            local_indices = np.array(self.config[name])
 
-            # eqn. (2)
-            # first point in each gropi (in JSON config) is the root
+            global_indices = local_indices + self.offsets[name]
+
+            group_data = x[:, :, :, global_indices]  # [B, 3, T, V_local]
+
+            # first point in each group MUST be the root
             root_point = group_data[:, :, :, 0].unsqueeze(-1)
+            # centralization - eqn. (2)
             centralized_groups[name] = group_data - root_point
 
         features = []
@@ -151,7 +140,7 @@ class STGCNCoSign1s(nn.Module):
         features.append(self.gcn_modules["hands"](centralized_groups["l_hand"]))
         features.append(self.gcn_modules["hands"](centralized_groups["r_hand"]))
 
-        v = torch.cat(features, dim=-1)
+        v = torch.cat(features, dim=-1)  # [B, T, 320]
 
         # TODO: if we implement dropout mask it will be here
         # v = v * xi
