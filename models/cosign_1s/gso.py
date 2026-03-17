@@ -7,11 +7,11 @@ import torch
 from mediapipe.tasks.python import vision
 
 
-class GraphGenerator:
+class GSOGenerator:
     """Class for dynamic GSO generation."""
 
     def __init__(self, config_file):
-        """Constructor of GraphGenerator class.
+        """Constructor of GSOGenerator class.
 
         Args:
             config_file: path to json file with skeleton configuration
@@ -167,4 +167,4 @@ def create_gso(n_vertex, edges):
 if __name__ == "__main__":
     mouth = [(conn.start, conn.end) for conn in vision.FaceLandmarksConnections.FACE_LANDMARKS_LIPS]
     print(len(mouth))
-    dwd = GraphGenerator("./example_config.json")
+    dwd = GSOGenerator("./example_config.json")
