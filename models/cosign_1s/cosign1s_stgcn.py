@@ -3,7 +3,7 @@
 import torch
 import torch.nn as nn
 
-from models.cosign_1s.gso import body_edges, create_gso, hand_edges
+from models.cosign_1s.gso import create_gso
 from models.stgcn.models import STGCNGraphConv as STGCN
 
 
