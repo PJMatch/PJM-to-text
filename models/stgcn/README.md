@@ -15,3 +15,13 @@ The original license file is preserved in this directory as `LICENSE`.
 3. Commented out the output computation block in *forward* of STGCNGraphConv for CSLR purposes
 4. Commented out the output layers configuration in the constructor of STGCNGraphConv
 5. Changed the for loop range in the constructor of STGCNGraphConv (we don't use the output layers so we want the *blocks* argument to not be forced to include such layers)
+6. In *layers.py*, line 112, in forward:
+```
+112        x_in = self.align(x)[:, :, self.Kt - 1:, :]
+```
+for:
+```
+112         x_in = self.align(x)
+```
+to preserve the original size 
+7. Changed *GraphConv* class (*layers.py*) to be compatible with CoSign-proposed [Ks, V, V] GSO shape

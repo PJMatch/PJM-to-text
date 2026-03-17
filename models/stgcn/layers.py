@@ -85,7 +85,7 @@ class TemporalConvLayer(nn.Module):
         self.act_func = act_func
 
     def forward(self, x):   
-        x_in = self.align(x)[:, :, self.Kt - 1:, :]
+        x_in = self.align(x)
         x_causal_conv = self.causal_conv(x)
 
         if self.act_func == 'glu' or self.act_func == 'gtu':
@@ -177,7 +177,9 @@ class GraphConv(nn.Module):
         self.c_in = c_in
         self.c_out = c_out
         self.gso = gso
-        self.weight = nn.Parameter(torch.FloatTensor(c_in, c_out))
+        self.Ks = gso.shape[0]
+
+        self.weight = nn.Parameter(torch.FloatTensor(self.Ks, c_in, c_out))
         if bias:
             self.bias = nn.Parameter(torch.FloatTensor(c_out))
         else:
@@ -187,21 +189,21 @@ class GraphConv(nn.Module):
     def reset_parameters(self):
         init.kaiming_uniform_(self.weight, a=math.sqrt(5))
         if self.bias is not None:
-            fan_in, _ = init._calculate_fan_in_and_fan_out(self.weight)
+            fan_in = self.Ks * self.c_in
             bound = 1 / math.sqrt(fan_in) if fan_in > 0 else 0
             init.uniform_(self.bias, -bound, bound)
+            # fan_in, _ = init._calculate_fan_in_and_fan_out(self.weight)
+            # bound = 1 / math.sqrt(fan_in) if fan_in > 0 else 0
+            # init.uniform_(self.bias, -bound, bound)
 
     def forward(self, x):
         #bs, c_in, ts, n_vertex = x.shape
         x = torch.permute(x, (0, 2, 3, 1))
 
-        first_mul = torch.einsum('hi,btij->bthj', self.gso, x)
-        second_mul = torch.einsum('bthi,ij->bthj', first_mul, self.weight)
+        graph_conv = torch.einsum('khi,btij,kjm->bthm', self.gso, x, self.weight)
 
         if self.bias is not None:
-            graph_conv = torch.add(second_mul, self.bias)
-        else:
-            graph_conv = second_mul
+            graph_conv = torch.add(graph_conv, self.bias)
         
         return graph_conv
 

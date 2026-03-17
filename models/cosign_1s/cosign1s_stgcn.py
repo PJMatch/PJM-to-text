@@ -1,5 +1,7 @@
 """This module contains code for our implementation of 1-stream CoSign architecture."""
 
+from pathlib import Path
+
 import numpy as np
 import torch
 import torch.nn as nn
@@ -7,7 +9,6 @@ import torch.nn as nn
 from models.cosign_1s.gso import GSOGenerator
 from models.stgcn.models import STGCNGraphConv as STGCN
 
-CONFIG_FILE_PATH = "./config.json"
 CONST_KS = 2  # DO NOT CHANGE
 
 COSIGN_BLOCKS = [
@@ -53,9 +54,13 @@ class STGCNCoSign1s(nn.Module):
     }
     """
 
-    def __init__(self, config_path="./config.json"):
+    def __init__(self, config_path=None):
         """CoSign1s ST-GCN's constructor."""
         super().__init__()
+
+        if config_path is None:
+            current_dir = Path(__file__).resolve().parent
+            config_path = current_dir / "config.json"
 
         self.gso_generator = GSOGenerator(config_path)
         self.config = self.gso_generator.config
@@ -90,11 +95,11 @@ class STGCNCoSign1s(nn.Module):
                     blocks=COSIGN_BLOCKS,
                     n_vertex=len(self.config["body"]),
                 ),
-                # both hands share the same weights - one module for both
+                # both hands share the same weights and the same topology in config
                 "hands": STGCN(
-                    args=self._create_args(self.gso_generator.gsos["hands"]),
+                    args=self._create_args(self.gso_generator.gsos["l_hand"]),
                     blocks=COSIGN_BLOCKS,
-                    n_vertex=len(self.config["hands"]),
+                    n_vertex=len(self.config["l_hand"]),
                 ),
             }
         )
@@ -134,19 +139,27 @@ class STGCNCoSign1s(nn.Module):
 
         features = []
 
-        features.append(self.gcn_modules["body"](centralized_groups["body"]))
-        features.append(self.gcn_modules["face"](centralized_groups["face"]))
-        features.append(self.gcn_modules["mouth"](centralized_groups["mouth"]))
-        features.append(self.gcn_modules["hands"](centralized_groups["l_hand"]))
-        features.append(self.gcn_modules["hands"](centralized_groups["r_hand"]))
+        for name, module_name in [
+            ("body", "body"),
+            ("face", "face"),
+            ("mouth", "mouth"),
+            ("l_hand", "hands"),
+            ("r_hand", "hands"),
+        ]:
+            # gcn outputs [B, 64, T, V]
+            feat = self.gcn_modules[module_name](centralized_groups[name])
 
-        v = torch.cat(features, dim=-1)  # [B, T, 320]
+            # global average pooling over vertecies (dim=-1)
+            # result [B, 64, T]
+            feat = feat.mean(dim=-1)
+            features.append(feat)
+
+        # print(f"DEBUG: Shape of one feature: {features[0].shape}")
+        v = torch.cat(features, dim=1)  # [B, 320, T]
 
         # TODO: if we implement dropout mask it will be here
         # v = v * xi
 
-        # [B, T, 5*C] -> [B, 5*C, T] for BatchNorm1d in MLP
-        v = v.permute(0, 2, 1)
         v_fused = self.fusion_mlp(v)
 
         return v_fused

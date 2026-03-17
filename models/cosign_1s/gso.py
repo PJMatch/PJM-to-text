@@ -60,14 +60,21 @@ class GSOGenerator:
 
     def _generate_all_gsos(self):
         """Iterates over config and generates GSO matricies."""
+        topology_map = {
+            "l_hand": "hands",
+            "r_hand": "hands",
+            "face": "face",
+            "mouth": "mouth",
+            "body": "body",
+        }
         for group_name, indices in self.config.items():
             if not indices:
                 print(f"Warning: Group {group_name} has no indices in config. Skipping.")
                 continue
 
-            base_type = group_name
+            base_topology = topology_map.get(group_name, group_name)
 
-            self.gsos[group_name] = self.get_local_gso(indices, base_type)
+            self.gsos[group_name] = self.get_local_gso(indices, base_topology)
 
     def get_local_gso(self, target_idx: list, group_type: str):
         """Creates GSO only for a given subset of the MediaPipe's graph.
