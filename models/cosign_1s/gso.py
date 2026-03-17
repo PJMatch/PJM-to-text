@@ -10,13 +10,13 @@ from mediapipe.tasks.python import vision
 class GSOGenerator:
     """Class for dynamic GSO generation."""
 
-    def __init__(self, config_file):
+    def __init__(self, config_path):
         """Constructor of GSOGenerator class.
 
         Args:
-            config_file: path to json file with skeleton configuration
+            config_path: path to json file with skeleton configuration
 
-        The json file needs to resemble a dict in this form:
+        The json file MUST resemble a dict in this form:
             {
                 "face": [],
                 "mouth": [],
@@ -52,10 +52,22 @@ class GSOGenerator:
         ]
         self.master_edges["hands"].extend(wrist_to_fingers)
 
-        with open(config_file, "r") as config_f:
-            self.config = json.load(config_f)
+        with open(config_path, "r") as config_file:
+            self.config = json.load(config_file)
 
-        # TODO: generate GSOs for each part
+        self.gsos = {}
+        self._generate_all_gsos()
+
+    def _generate_all_gsos(self):
+        """Iterates over config and generates GSO matricies."""
+        for group_name, indices in self.config.items():
+            if not indices:
+                print(f"Warning: Group {group_name} has no indices in config. Skipping.")
+                continue
+
+            base_type = group_name
+
+            self.gsos[group_name] = self.get_local_gso(indices, base_type)
 
     def get_local_gso(self, target_idx: list, group_type: str):
         """Creates GSO only for a given subset of the MediaPipe's graph.
@@ -67,8 +79,6 @@ class GSOGenerator:
             local_gso: GSO of a target subset
         """
         n_vertex = len(target_idx)
-        # Mapowanie: Global ID -> Local Index (0 do n-1)
-        # Przykład: punkt 468 (nos) staje się indeksem 0 w nowej macierzy
         id_map = {global_id: i for i, global_id in enumerate(target_idx)}
 
         global_edges = self.master_edges.get(group_type, [])
@@ -85,86 +95,30 @@ class GSOGenerator:
         return local_gso
 
     def normalize_adj_matrix(self, adj_matrix):
-        """Normalize adjacancy matrix acording to the CoSign paper."""
+        """Normalize adjacancy matrix acording to the CoSign paper (eqn. 3)."""
         A = adj_matrix
+        n = A.shape[0]
+        Eye = np.eye(n)
+        epsilon = 0.001
 
-        A_tilde = A + np.eye(A.shape[0])
+        # calculate GSO for k=0 (A0 = I)
+        d0 = np.sum(Eye, axis=1) + epsilon
+        d0_inv_sqrt = np.power(d0, -0.5)
+        D0_inv_sqrt = np.diag(d0_inv_sqrt)
+        GSO_0 = D0_inv_sqrt @ Eye @ D0_inv_sqrt
 
-        D_tilde = np.diag(np.sum(A_tilde, axis=1))
+        # calculate GSO for k=1 (A1 = A)
+        d1 = np.sum(A, axis=1) + epsilon  # Lambda_ii dla A
+        d1_inv_sqrt = np.power(d1, -0.5)
+        D1_inv_sqrt = np.diag(d1_inv_sqrt)
+        GSO_1 = D1_inv_sqrt @ A @ D1_inv_sqrt
 
-        # normalization as in the CoSign paper:
-        # D^-0.5 * A * D^-0.5
-        D_inv_sqrt = np.power(D_tilde, -0.5, where=D_tilde != 0)
-        D_inv_sqrt = np.diag(D_inv_sqrt)
-
-        GSO = D_inv_sqrt @ A_tilde @ D_inv_sqrt
+        GSO = np.stack([GSO_0, GSO_1], axis=0)
 
         return torch.tensor(GSO, dtype=torch.float32)
 
 
-n_hands = 21
-# fmt: off
-hand_edges = [
-    # fingers' bones
-    (0,1), (1,2), (2,3), (3,4),         # thumb
-    (5,6), (6,7), (7,8),         # index
-    (9,10), (10,11), (11,12),    # middle
-    (13,14), (14,15), (15,16),  # ring
-    (17,18), (18,19), (19,20),  # pinky
-    # writs-to-finger (mediapipe doesnt include these natively) 
-    (0,5),      # to index
-    (0,9),      # to middle 
-    (0,13),      # to ring
-    (0,17),      # to pinky
-    # palm
-    (5, 9),   # index to middle
-    (9, 13),  # middle to ring
-    (13, 17)  # ring to pinky
-]
-# fmt: on
-
-hands_conn = (n_hands, hand_edges)
-
-
-n_body = 30
-# fmt: off
-body_edges = [
-    # right arm
-    (12,14), (14,16), 
-    # left arm
-    (11,13), (13,15), 
-    # torso
-    (11,12), (12,24), (24,23), (23,11),
-    # right leg
-    (24,26), (26,28), (28,30), (30,32), (32,28),
-    # left leg
-    (23,25), (25,27), (27,29), (31,32), (32,28)
-]
-# fmt: on
-
-
-def create_gso(n_vertex, edges):
-    """Creates a GSO for given graph edges."""
-    A = np.zeros((n_vertex, n_vertex))  # adjecancy matrix
-    for i, j in edges:
-        A[i, j] = 1
-        A[j, i] = 1
-
-    A_tilde = A + np.eye(n_vertex)
-
-    D_tilde = np.diag(np.sum(A_tilde, axis=1))
-
-    # normalization as in the CoSign paper:
-    # D^-0.5 * A * D^-0.5
-    D_inv_sqrt = np.power(D_tilde, -0.5, where=D_tilde != 0)
-    D_inv_sqrt = np.diag(D_inv_sqrt)
-
-    GSO = D_inv_sqrt @ A_tilde @ D_inv_sqrt
-
-    return torch.tensor(GSO, dtype=torch.float32)
-
-
 if __name__ == "__main__":
-    mouth = [(conn.start, conn.end) for conn in vision.FaceLandmarksConnections.FACE_LANDMARKS_LIPS]
-    print(len(mouth))
+    pose = ([(conn.start, conn.end) for conn in vision.PoseLandmarksConnections.POSE_LANDMARKS],)
+    print(pose)
     dwd = GSOGenerator("./example_config.json")
