@@ -3,6 +3,7 @@
 import torch
 import torch.nn as nn
 
+from models.cosign_1s.gso import body_edges, create_gso, hand_edges
 from models.stgcn.models import STGCNGraphConv as STGCN
 
 
@@ -32,7 +33,7 @@ cs_blocks = [
 ]
 
 
-hand_gso_matrix = None
+hand_gso_matrix = create_gso()
 face_gso_matrix = None
 body_gso_matrix = None
 mouth_gso_matrix = None
@@ -122,7 +123,7 @@ class STGCNCoSign1s(nn.Module):
 
         # fmt: off
         # TODO: Need to actually check project's indexing schema
-        self.group_indices = {
+        group_indices_npy = {
             "body": list(range(0, 33)),
             "face": list(range(33, 511)),
             "l_hand": list(range(511, 532)),
@@ -133,6 +134,8 @@ class STGCNCoSign1s(nn.Module):
             ],
         }
         # fmt: on
+
+        self.group_indices = group_indices_npy  # not a bug - want it to be reference and not a copy
 
         self.gcn_modules = nn.ModuleDict(
             {
