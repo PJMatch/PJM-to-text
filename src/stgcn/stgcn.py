@@ -6,8 +6,8 @@ import numpy as np
 import torch
 import torch.nn as nn
 
-from models.cosign_1s.gso import GSOGenerator
-from models.stgcn.models import STGCNGraphConv as STGCN
+from .gso import GSOGenerator
+from .stgcn_src.models import STGCNGraphConv as STGCN
 
 CONST_KS = 2
 
