@@ -90,14 +90,16 @@ class LSTM(nn.Module):
 class SharedGlossHead(nn.Module):
     def __init__(self, feat_dim, vocab_size):
         super().__init__()
+        # basically CLIP temperature annealing strategy, but with a learnable scale parameter
         self.weight = nn.Parameter(torch.empty(vocab_size, feat_dim))
         nn.init.xavier_uniform_(self.weight)
+        self.scale = 1.0
 
     def forward(self, x):
-        # x: [B, T, C]
-        x = F.normalize(x, dim=-1)
-        w = F.normalize(self.weight, dim=-1)
-        return torch.matmul(x, w.t())  # [B, T, vocab_size]
+        x_norm = F.normalize(x, dim=-1)
+        w_norm = F.normalize(self.weight, dim=-1)
+        sim = torch.matmul(x_norm, w_norm.t())
+        return sim * self.scale
 
 
 class CoSign1SModel(nn.Module):
@@ -149,18 +151,24 @@ class CoSign1SModel(nn.Module):
         x_branch: [B, 1024, T]
         lengths:  [B]
         """
-        # 1) temporal CNN
         cnn_feat, out_lengths = self.temporal_cnn(x_branch, lengths)
-        # cnn_feat: [B, 1024, T']
 
-        # aux logits from CNN output
+        B, C, T_prime = cnn_feat.shape
+        device = cnn_feat.device
+
+        time_steps = torch.arange(
+            T_prime, device=device).unsqueeze(0)  # [1, T']
+        length_tensor = out_lengths.unsqueeze(1)  # [B, 1]
+
+        mask = time_steps < length_tensor
+        mask = mask.unsqueeze(1).expand_as(cnn_feat)  # [B, 1024, T']
+
+        cnn_feat = cnn_feat * mask
+
         aux_feat = cnn_feat.transpose(1, 2)        # [B, T', 1024]
         aux_logits = self.gloss_head(aux_feat)     # [B, T', V]
 
-        # 2) BiLSTM contextual module
         lstm_out = self.context_lstm(cnn_feat, out_lengths)
-        # lstm_out: [B, T', 1024]
-
         main_logits = self.gloss_head(lstm_out)    # [B, T', V]
 
         return {
@@ -170,14 +178,14 @@ class CoSign1SModel(nn.Module):
             "logit_lengths": out_lengths,  # [B]
         }
 
-    def forward(self, x, lengths, keep_prob=0.8):
+    def forward(self, x, lengths, keep_prob=1):
         """
         x:       [B, 3, T, V_total]  (mediapipe skeleton input)
         lengths: [B]  original sequence lengths
         keep_prob: masking keep probability
         Returns a dict with predictions for both complementary branches.
         """
-        branches = self.STGCN(x, keep_prob=keep_prob) # [B, 2, 1024, T]
+        branches = self.STGCN(x, keep_prob=keep_prob)  # [B, 2, 1024, T]
         branch_phi = branches[:, 0, ...]   # [B, 1024, T]
         branch_phi_inv = branches[:, 1, ...]   # [B, 1024, T]
 
@@ -188,6 +196,7 @@ class CoSign1SModel(nn.Module):
             "phi": out_phi,
             "phi_inv": out_phi_inv,
         }
+
 
 if __name__ == "__main__":
     model = CoSign1SModel(num_classes=1000)
