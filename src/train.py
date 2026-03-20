@@ -8,14 +8,15 @@ import tempfile
 import json
 import jiwer
 import torch.nn.functional as F
+from torch.utils.data import Subset
 
 from model import CoSign1SModel
 from phoenix_dataloader import PhoenixDataset, phoenix_ctc_collate_fn, build_gloss_vocab
 
-EPOCHS = 100
-BATCH_SIZE = 8
-LEARNING_RATE = 3e-4
-WEIGHT_DECAY = 1e-4
+EPOCHS = 1000
+BATCH_SIZE = 1
+LEARNING_RATE = 1e-4
+WEIGHT_DECAY = 0.0
 GRAD_CLIP = 1.0
 DEVICE = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 CHECKPOINT_DIR = "checkpoints"
@@ -24,6 +25,22 @@ DATA_DIR_TRAIN = "pheonix-dataset/train"
 DATA_DIR_DEV = "pheonix-dataset/dev"
 ANN_TRAIN = "annotations/PHOENIX-2014-T.train.corpus.csv"
 ANN_DEV = "annotations/PHOENIX-2014-T.dev.corpus.csv"
+
+def greedy_ctc_decode(logits, lengths, blank=0):
+    pred = logits.argmax(dim=-1)  # [B, T]
+    decoded = []
+
+    for b in range(pred.size(0)):
+        seq = pred[b, :lengths[b]].tolist()
+        out = []
+        prev = None
+        for tok in seq:
+            if tok != blank and tok != prev:
+                out.append(tok)
+            prev = tok
+        decoded.append(out)
+
+    return decoded, pred
 
 
 def save_checkpoint(model, optimizer, epoch, gloss2id, val_loss, filepath):
@@ -61,65 +78,21 @@ def compute_wer(hypotheses, references):
     return jiwer.wer(ref_strs, hyp_strs)
 
 
-def compute_cosign_loss(outputs, targets, target_lengths, criterion, kl_weight=0.1, keep_prob=0.8):
-    """CoSign loss: CTC on all heads + symmetric KL between complementary branches."""
-    total_loss = 0.0
 
-    ctc_losses = []
-    branches_to_train = ["phi"] if keep_prob == 1.0 else ["phi", "phi_inv"]
+def compute_cosign_loss(outputs, targets, target_lengths, criterion):
+    logits = outputs["phi"]["main_logits"]
+    logit_lengths = outputs["phi"]["logit_lengths"]
 
-    for branch in branches_to_train:
-        branch_out = outputs[branch]
+    if (logit_lengths < target_lengths).any():
+        print("BAD LENGTHS!", logit_lengths, target_lengths)
 
-        for head in ["aux_logits", "main_logits"]:
-            logits = branch_out[head]  # [B, T', V]
-            logit_lengths = branch_out["logit_lengths"]  # [B]
-
-            # PREVENT SEQUENCE LENGTH COLLAPSE
-            collapsed = False
-            for i in range(len(logit_lengths)):
-                if logit_lengths[i] < target_lengths[i]:
-                    logit_lengths[i] = target_lengths[i]
-                    collapsed = True
-            if collapsed and logit_lengths.max() > logits.size(1):
-                pad_len = logit_lengths.max() - logits.size(1)
-                logits = F.pad(logits, (0, 0, 0, pad_len))
-
-            log_probs = F.log_softmax(
-                logits, dim=-1).transpose(0, 1)  # [T', B, V]
-            ctc_loss = criterion(log_probs, targets,
-                                 logit_lengths, target_lengths)
-            ctc_losses.append(ctc_loss)
-
-    ctc_loss = torch.stack(ctc_losses).mean()
-    total_loss += ctc_loss
-
-    if keep_prob < 1.0:
-        aux_phi = F.log_softmax(outputs["phi"]["aux_logits"], dim=-1)
-        aux_phibar = F.log_softmax(outputs["phi_inv"]["aux_logits"], dim=-1)
-        aux_phi_soft = F.softmax(aux_phi, dim=-1)
-        aux_phibar_soft = F.softmax(aux_phibar, dim=-1)
-
-        kl_aux = F.kl_div(aux_phi, aux_phibar_soft, reduction='batchmean') + \
-            F.kl_div(aux_phibar, aux_phi_soft, reduction='batchmean')
-
-        main_phi = F.log_softmax(outputs["phi"]["main_logits"], dim=-1)
-        main_phibar = F.log_softmax(outputs["phi_inv"]["main_logits"], dim=-1)
-        main_phi_soft = F.softmax(main_phi, dim=-1)
-        main_phibar_soft = F.softmax(main_phibar, dim=-1)
-
-        kl_main = F.kl_div(main_phi, main_phibar_soft, reduction='batchmean') + \
-            F.kl_div(main_phibar, main_phi_soft, reduction='batchmean')
-
-        kl_loss = (kl_aux + kl_main) * 0.5 * kl_weight
-        total_loss += kl_loss
-
-    return total_loss
+    log_probs = F.log_softmax(logits, dim=-1).transpose(0, 1)
+    return criterion(log_probs, targets, logit_lengths, target_lengths)
 
 
 def evaluate(model, dataloader, criterion, ctc_decoder_obj, id2gloss, device):
     model.eval()
-    total_loss = 0
+    total_loss = 0.0
     all_hyps_phi = []
     all_hyps_phibar = []
     all_refs = []
@@ -132,37 +105,90 @@ def evaluate(model, dataloader, criterion, ctc_decoder_obj, id2gloss, device):
             targets = batch["targets"].to(device)
             target_lengths = batch["target_lengths"].to(device)
 
-            outputs = model(frames, frame_lengths)
+            outputs = model(frames, frame_lengths, keep_prob=1.0)
             loss = compute_cosign_loss(
-                outputs, targets, target_lengths, criterion, keep_prob=1.0)
+                outputs, targets, target_lengths, criterion)
             total_loss += loss.item()
 
-            for branch_name in ["phi", "phi_inv"]:
-                logits = outputs[branch_name]["main_logits"]
-                log_probs = F.log_softmax(logits, dim=-1)  # [B, T', V]
-                emissions = log_probs.cpu()
-                seq_lengths = outputs[branch_name]["logit_lengths"].cpu()
+            logits_phi = outputs["phi"]["main_logits"]
+            log_probs_phi = F.log_softmax(logits_phi, dim=-1).cpu()
+            seq_lengths_phi = outputs["phi"]["logit_lengths"].cpu()
+            decode_results_phi = ctc_decoder_obj(
+                log_probs_phi, seq_lengths_phi)
 
-                decode_results = ctc_decoder_obj(emissions, seq_lengths)
+            logits_phibar = outputs["phi_inv"]["main_logits"]
+            log_probs_phibar = F.log_softmax(logits_phibar, dim=-1).cpu()
+            seq_lengths_phibar = outputs["phi_inv"]["logit_lengths"].cpu()
+            decode_results_phibar = ctc_decoder_obj(
+                log_probs_phibar, seq_lengths_phibar)
 
-                for i, result in enumerate(decode_results):
-                    best_hyp = result[0].tokens.tolist()
-                    hyp_words = [id2gloss.get(v, "<unk>")
-                                 for v in best_hyp if v != 0]
+            batch_size = targets.size(0)
+            for i in range(batch_size):
+                hyp_phi = decode_results_phi[i][0].tokens.tolist()
+                hyp_phibar = decode_results_phibar[i][0].tokens.tolist()
 
-                    if branch_name == "phi":
-                        all_hyps_phi.append(hyp_words)
-                    else:
-                        all_hyps_phibar.append(hyp_words)
+                hyp_phi_words = [id2gloss.get(v, "")
+                                 for v in hyp_phi if v != 0]
+                hyp_phibar_words = [id2gloss.get(
+                    v, "") for v in hyp_phibar if v != 0]
+                ref_words = [
+                    id2gloss.get(v.item(), "")
+                    for v in targets[i][:target_lengths[i]]
+                    if v.item() != 0
+                ]
 
-                    ref_words = [id2gloss.get(
-                        v.item(), "<unk>") for v in targets[i][:target_lengths[i]] if v.item() != 0]
-                    all_refs.append(ref_words)
+                all_hyps_phi.append(hyp_phi_words)
+                all_hyps_phibar.append(hyp_phibar_words)
+                all_refs.append(ref_words)
 
-    phi_wer = compute_wer(all_hyps_phi, all_refs[:len(all_hyps_phi)])
-    phibar_wer = compute_wer(all_hyps_phibar, all_refs[:len(all_hyps_phibar)])
-    avg_wer = phi_wer  # During eval keep_prob=1.0, phi_inv gets zeroed out, so we only care about main branch
-    return total_loss / len(dataloader), avg_wer, phi_wer, phibar_wer
+            break
+
+    phi_wer = compute_wer(all_hyps_phi, all_refs)
+    phibar_wer = compute_wer(all_hyps_phibar, all_refs)
+    avg_wer = phi_wer
+
+    for i in range(min(3, len(all_refs), len(all_hyps_phi), len(all_hyps_phibar))):
+        print(f"TARGET   : {' '.join(all_refs[i])}")
+        print(f"PHI PRED : {' '.join(all_hyps_phi[i])}")
+        print(f"INV PRED : {' '.join(all_hyps_phibar[i])}")
+        print()
+
+    return total_loss, avg_wer, phi_wer, phibar_wer
+
+
+def debug_first_batch(model, dataloader, id2gloss, device):
+    model.train()
+    batch = next(iter(dataloader))
+
+    with torch.no_grad():
+        frames = batch["frames"].to(device).permute(0, 3, 1, 2)
+        frame_lengths = batch["frame_lengths"].to(device)
+        targets = batch["targets"].to(device)
+        target_lengths = batch["target_lengths"].to(device)
+
+        outputs = model(frames, frame_lengths, keep_prob=1.0)
+
+        logits = outputs["phi"]["main_logits"]                  # [B, T', V]
+        pred_ids = logits.argmax(dim=-1)                       # [B, T']
+        blank_ratio = (pred_ids == 0).float().mean().item()
+
+        print("blank_ratio:", blank_ratio)
+        print("logit_lengths:", outputs["phi"]["logit_lengths"].tolist())
+        print("target_lengths:", target_lengths.tolist())
+
+        for i in range(min(3, logits.size(0))):
+            hyp = [id2gloss[idx.item()]
+                   for idx in pred_ids[i] if idx.item() != 0]
+            ref = [id2gloss[idx.item()]
+                   for idx in targets[i][:target_lengths[i]] if idx.item() != 0]
+            print("REF :", " ".join(ref))
+            print("ARGM:", " ".join(hyp))
+            print()
+
+        print("Debug info: [target_lengths, logit_lengths, targets]")
+        print(target_lengths[:2])
+        print(outputs["phi"]["logit_lengths"][:2])
+        print(targets[:2])
 
 
 def main():
@@ -174,18 +200,32 @@ def main():
     print(f"Vocabulary size: {num_classes}")
 
     print("Loading datasets")
-    train_dataset = PhoenixDataset(DATA_DIR_TRAIN, ANN_TRAIN, gloss2id)
-    dev_dataset = PhoenixDataset(DATA_DIR_DEV, ANN_DEV, gloss2id)
 
-    train_loader = DataLoader(train_dataset, batch_size=BATCH_SIZE, shuffle=True,
-                              collate_fn=phoenix_ctc_collate_fn, num_workers=2, pin_memory=True)
-    dev_loader = DataLoader(dev_dataset, batch_size=BATCH_SIZE, shuffle=False,
-                            collate_fn=phoenix_ctc_collate_fn, num_workers=2, pin_memory=True)
+    # dev_dataset = PhoenixDataset(DATA_DIR_DEV, ANN_DEV, gloss2id)
+    #
+    # train_loader = DataLoader(train_dataset, batch_size=BATCH_SIZE, shuffle=True,
+    #                           collate_fn=phoenix_ctc_collate_fn, num_workers=2, pin_memory=True)
+    # dev_loader = DataLoader(dev_dataset, batch_size=BATCH_SIZE, shuffle=False,
+    #                         collate_fn=phoenix_ctc_collate_fn, num_workers=2, pin_memory=True)
+    train_dataset_full = PhoenixDataset(DATA_DIR_TRAIN, ANN_TRAIN, gloss2id)
+    
+    tiny_indices = [0] 
+    train_dataset = Subset(train_dataset_full, tiny_indices)
+
+    train_loader = DataLoader(
+        train_dataset,
+        batch_size=1, 
+        shuffle=False,
+        collate_fn=phoenix_ctc_collate_fn,
+        num_workers=0,
+        pin_memory=True,
+    )
+
+    dev_dataset = PhoenixDataset(DATA_DIR_DEV, ANN_DEV, gloss2id)
 
     print("Setting up CTC decoder...")
     tokens = [id2gloss[i] for i in range(num_classes)]
 
-    # torchaudio expects ONE TOKEN PER LINE
     with tempfile.NamedTemporaryFile(mode='w', delete=False, suffix='.txt') as f:
         f.write('\n'.join(tokens) + '\n')
         token_file = f.name
@@ -198,14 +238,17 @@ def main():
     )
 
     print(f"Initializing model on {DEVICE}...")
-    model = CoSign1SModel(num_classes=num_classes)
+    model = CoSign1SModel(num_classes=num_classes, dropout=0.0)
     model.to(DEVICE)
 
-    optimizer = optim.AdamW(
+    optimizer = optim.Adam(
         model.parameters(), lr=LEARNING_RATE, weight_decay=WEIGHT_DECAY)
     scheduler = optim.lr_scheduler.ReduceLROnPlateau(
         optimizer, mode='min', factor=0.5, patience=5)
-    criterion = nn.CTCLoss(blank=0, zero_infinity=True)
+    criterion = nn.CTCLoss(blank=0,reduction="mean", zero_infinity=False)
+
+    debug_first_batch(model, train_loader, id2gloss, DEVICE)
+    print("End")
 
     start_epoch = 0
     latest_ckpt = os.path.join(CHECKPOINT_DIR, "latest.pth")
@@ -216,12 +259,18 @@ def main():
     WARMUP_EPOCHS = 10
 
     for epoch in range(start_epoch, EPOCHS):
+
         model.train()
         total_train_loss = 0
         num_batches = 0
 
+        current_scale = min(25.0, 1.0 + (epoch * 2.0))
+        model.gloss_head.scale = current_scale
+
+        print(f"Epoch {epoch} | Cosine Scale: {current_scale}")
+
         # Warmup phase without masking
-        current_keep_prob = 1.0 if epoch < WARMUP_EPOCHS else 0.8
+        current_keep_prob = 1.0  # if epoch < WARMUP_EPOCHS else 0.8
 
         for batch_idx, batch in enumerate(train_loader):
             optimizer.zero_grad()
@@ -234,7 +283,7 @@ def main():
 
             outputs = model(frames, frame_lengths, keep_prob=current_keep_prob)
             loss = compute_cosign_loss(
-                outputs, targets, target_lengths, criterion, keep_prob=current_keep_prob)
+                outputs, targets, target_lengths, criterion)
 
             loss.backward()
             torch.nn.utils.clip_grad_norm_(model.parameters(), GRAD_CLIP)
@@ -242,18 +291,21 @@ def main():
 
             total_train_loss += loss.item()
             num_batches += 1
-            if (batch_idx + 1) % 100 == 0:
-                print(f"Epoch {epoch+1:3d} | Batch {batch_idx +
-                      1:4d}/{len(train_loader)} | Loss: {loss.item():.4f}")
+            if(batch_idx == 0):
+                break
+            # if (batch_idx + 1) % 100 == 0:
+            #     print(f"Epoch {epoch+1:3d} | Batch {batch_idx +
+            #           1:4d}/{len(train_loader)} | Loss: {loss.item():.4f}")
+            break
 
-        avg_train_loss = total_train_loss / num_batches
-        scheduler.step(avg_train_loss)
+        # avg_train_loss = total_train_loss / num_batches
+        # scheduler.step(avg_train_loss)
 
         val_loss, avg_wer, phi_wer, phibar_wer = evaluate(
-            model, dev_loader, criterion, ctc_decoder_obj, id2gloss, DEVICE
+            model, train_loader, criterion, ctc_decoder_obj, id2gloss, DEVICE
         )
 
-        print(f"Epoch {epoch+1:3d} | Train: {avg_train_loss:.4f} | Val: {val_loss:.4f} "
+        print(f"Epoch {epoch+1:3d} | "
               f"| WER: {avg_wer:.3f} (phi:{phi_wer:.3f}, phi_inv:{
             phibar_wer:.3f}) "
             f"| LR: {scheduler.get_last_lr()[0]:.2e}")

@@ -12,12 +12,12 @@ class CoSignTemporalCNN(nn.Module):
         super().__init__()
 
         self.conv1 = nn.Conv1d(in_dim, hidden_dim, kernel_size=3, padding=1)
-        self.bn1 = nn.BatchNorm1d(hidden_dim)
+        # Use GroupNorm! It works on Batch Size 1 and ignores padding variance.
+        self.norm1 = nn.GroupNorm(32, hidden_dim) 
         self.pool1 = nn.MaxPool1d(kernel_size=2, stride=2)
 
-        self.conv2 = nn.Conv1d(hidden_dim, hidden_dim,
-                               kernel_size=3, padding=1)
-        self.bn2 = nn.BatchNorm1d(hidden_dim)
+        self.conv2 = nn.Conv1d(hidden_dim, hidden_dim, kernel_size=3, padding=1)
+        self.norm2 = nn.GroupNorm(32, hidden_dim)
         self.pool2 = nn.MaxPool1d(kernel_size=2, stride=2)
 
         self.relu = nn.ReLU(inplace=True)
@@ -35,13 +35,13 @@ class CoSignTemporalCNN(nn.Module):
     def forward(self, x, lengths=None):
         # x: [B, C, T]
         x = self.conv1(x)
-        x = self.bn1(x)
+        x = self.norm1(x)
         x = self.relu(x)
         x = self.drop(x)
         x = self.pool1(x)
 
         x = self.conv2(x)
-        x = self.bn2(x)
+        x = self.norm2(x)
         x = self.relu(x)
         x = self.drop(x)
         x = self.pool2(x)
@@ -90,16 +90,10 @@ class LSTM(nn.Module):
 class SharedGlossHead(nn.Module):
     def __init__(self, feat_dim, vocab_size):
         super().__init__()
-        # basically CLIP temperature annealing strategy, but with a learnable scale parameter
-        self.weight = nn.Parameter(torch.empty(vocab_size, feat_dim))
-        nn.init.xavier_uniform_(self.weight)
-        self.scale = 1.0
+        self.proj = nn.Linear(feat_dim, vocab_size)
 
     def forward(self, x):
-        x_norm = F.normalize(x, dim=-1)
-        w_norm = F.normalize(self.weight, dim=-1)
-        sim = torch.matmul(x_norm, w_norm.t())
-        return sim * self.scale
+        return self.proj(x)
 
 
 class CoSign1SModel(nn.Module):
