@@ -1,0 +1,208 @@
+import torch
+import torch.nn as nn
+import torch.nn.functional as F
+from torch.nn.utils.rnn import pack_padded_sequence, pad_packed_sequence
+from stgcn.stgcn import STGCNCoSign1s
+
+
+class CoSignTemporalCNN(nn.Module):
+    """Temporal module: C3-P2-C3-P2."""
+
+    def __init__(self, in_dim=1024, hidden_dim=1024, dropout=0.2):
+        super().__init__()
+
+        self.conv1 = nn.Conv1d(in_dim, hidden_dim, kernel_size=3, padding=1)
+        self.bn1 = nn.BatchNorm1d(hidden_dim)
+        self.pool1 = nn.MaxPool1d(kernel_size=2, stride=2)
+
+        self.conv2 = nn.Conv1d(hidden_dim, hidden_dim,
+                               kernel_size=3, padding=1)
+        self.bn2 = nn.BatchNorm1d(hidden_dim)
+        self.pool2 = nn.MaxPool1d(kernel_size=2, stride=2)
+
+        self.relu = nn.ReLU(inplace=True)
+        self.drop = nn.Dropout(dropout)
+
+    @staticmethod
+    def _pool_out_lengths(lengths, kernel_size=2, stride=2, padding=0, dilation=1):
+        out_lengths = torch.div(
+            lengths + 2 * padding - dilation * (kernel_size - 1) - 1,
+            stride,
+            rounding_mode="floor",
+        ) + 1
+        return torch.clamp(out_lengths, min=1)
+
+    def forward(self, x, lengths=None):
+        # x: [B, C, T]
+        x = self.conv1(x)
+        x = self.bn1(x)
+        x = self.relu(x)
+        x = self.drop(x)
+        x = self.pool1(x)
+
+        x = self.conv2(x)
+        x = self.bn2(x)
+        x = self.relu(x)
+        x = self.drop(x)
+        x = self.pool2(x)
+
+        if lengths is not None:
+            lengths = self._pool_out_lengths(lengths)
+            lengths = self._pool_out_lengths(lengths)
+
+        return x, lengths
+
+
+class LSTM(nn.Module):
+    """Two-layer bidirectional LSTM contextual module."""
+
+    def __init__(self, input_dim=1024, hidden_size=512, num_layers=2, dropout=0.2):
+        super().__init__()
+        self.lstm = nn.LSTM(
+            input_size=input_dim,
+            hidden_size=hidden_size,
+            num_layers=num_layers,
+            dropout=dropout if num_layers > 1 else 0.0,
+            bidirectional=True,
+            batch_first=True,
+        )
+
+    def forward(self, x, lengths=None):
+        # x: [B, C, T] -> [B, T, C]
+        x = x.transpose(1, 2)
+
+        if lengths is None:
+            out, _ = self.lstm(x)
+            return out
+
+        packed = pack_padded_sequence(
+            x,
+            lengths.cpu(),
+            batch_first=True,
+            enforce_sorted=False,
+        )
+        packed_out, _ = self.lstm(packed)
+        out, _ = pad_packed_sequence(packed_out, batch_first=True)
+
+        return out
+
+
+class SharedGlossHead(nn.Module):
+    def __init__(self, feat_dim, vocab_size):
+        super().__init__()
+        # basically CLIP temperature annealing strategy, but with a learnable scale parameter
+        self.weight = nn.Parameter(torch.empty(vocab_size, feat_dim))
+        nn.init.xavier_uniform_(self.weight)
+        self.scale = 1.0
+
+    def forward(self, x):
+        x_norm = F.normalize(x, dim=-1)
+        w_norm = F.normalize(self.weight, dim=-1)
+        sim = torch.matmul(x_norm, w_norm.t())
+        return sim * self.scale
+
+
+class CoSign1SModel(nn.Module):
+    """
+    One-stream CoSign model with complementary masking:
+
+    ST-GCN (with masking & fusion) -> [B, 2, 1024, T]
+        branch 0: phi
+        branch 1: 1 - phi
+
+    For each branch:
+        1D CNN -> aux gloss head (CTC)
+        BiLSTM -> main gloss head (CTC)
+    """
+
+    def __init__(
+        self,
+        num_classes,
+        stgcn_config_path=None,
+        feat_dim=1024,
+        lstm_hidden=512,
+        dropout=0.2,
+    ):
+        super().__init__()
+
+        self.STGCN = STGCNCoSign1s(config_path=stgcn_config_path)
+
+        self.temporal_cnn = CoSignTemporalCNN(
+            in_dim=feat_dim,
+            hidden_dim=feat_dim,
+            dropout=dropout,
+        )
+
+        self.context_lstm = LSTM(
+            input_dim=feat_dim,
+            hidden_size=lstm_hidden,
+            num_layers=2,
+            dropout=dropout,
+        )
+
+        self.gloss_head = SharedGlossHead(
+            feat_dim=2 * lstm_hidden,
+            vocab_size=num_classes,
+        )
+
+    def _forward_branch(self, x_branch, lengths):
+        """
+        One complementary branch:
+        x_branch: [B, 1024, T]
+        lengths:  [B]
+        """
+        cnn_feat, out_lengths = self.temporal_cnn(x_branch, lengths)
+
+        B, C, T_prime = cnn_feat.shape
+        device = cnn_feat.device
+
+        time_steps = torch.arange(
+            T_prime, device=device).unsqueeze(0)  # [1, T']
+        length_tensor = out_lengths.unsqueeze(1)  # [B, 1]
+
+        mask = time_steps < length_tensor
+        mask = mask.unsqueeze(1).expand_as(cnn_feat)  # [B, 1024, T']
+
+        cnn_feat = cnn_feat * mask
+
+        aux_feat = cnn_feat.transpose(1, 2)        # [B, T', 1024]
+        aux_logits = self.gloss_head(aux_feat)     # [B, T', V]
+
+        lstm_out = self.context_lstm(cnn_feat, out_lengths)
+        main_logits = self.gloss_head(lstm_out)    # [B, T', V]
+
+        return {
+            "cnn_feat": cnn_feat,          # [B, 1024, T']
+            "aux_logits": aux_logits,      # [B, T', V]
+            "main_logits": main_logits,    # [B, T', V]
+            "logit_lengths": out_lengths,  # [B]
+        }
+
+    def forward(self, x, lengths, keep_prob=1):
+        """
+        x:       [B, 3, T, V_total]  (mediapipe skeleton input)
+        lengths: [B]  original sequence lengths
+        keep_prob: masking keep probability
+        Returns a dict with predictions for both complementary branches.
+        """
+        branches = self.STGCN(x, keep_prob=keep_prob)  # [B, 2, 1024, T]
+        branch_phi = branches[:, 0, ...]   # [B, 1024, T]
+        branch_phi_inv = branches[:, 1, ...]   # [B, 1024, T]
+
+        out_phi = self._forward_branch(branch_phi, lengths)
+        out_phi_inv = self._forward_branch(branch_phi_inv, lengths)
+
+        return {
+            "phi": out_phi,
+            "phi_inv": out_phi_inv,
+        }
+
+
+if __name__ == "__main__":
+    model = CoSign1SModel(num_classes=1000)
+    x = torch.randn(4, 3, 300, 553)
+    lengths = torch.tensor([300, 250, 200, 150])
+    outputs = model(x, lengths)
+    print(f"phi main: {outputs['phi']['main_logits'].shape}")
+    print(f"phi_inv main: {outputs['phi_inv']['main_logits'].shape}")
+    print(f"aux logit lengths: {outputs['phi']['logit_lengths']}")

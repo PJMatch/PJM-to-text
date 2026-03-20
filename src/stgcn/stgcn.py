@@ -6,10 +6,10 @@ import numpy as np
 import torch
 import torch.nn as nn
 
-from models.cosign_1s.gso import GSOGenerator
-from models.stgcn.models import STGCNGraphConv as STGCN
+from .gso import GSOGenerator
+from .stgcn_src.models import STGCNGraphConv as STGCN
 
-CONST_KS = 2  # DO NOT CHANGE
+CONST_KS = 2
 
 COSIGN_BLOCKS = [
     [3],  # input
@@ -30,7 +30,8 @@ class STGCNArgs:
         self.Kt = Kt  # Temporal Kernel Size
         self.Ks = Ks  # Spatial Kernel Size
         self.act_func = act_func  # activation funciton, can be glu / gtu / relu / silu
-        self.graph_conv_type = graph_conv_type  # can be 'cheb_graph_conv' or 'graph_conv'
+        # can be 'cheb_graph_conv' or 'graph_conv'
+        self.graph_conv_type = graph_conv_type
         self.gso = gso  # graph signal operator - adjecency matrix
 
         self.enable_bias = enable_bias  # bool
@@ -68,7 +69,7 @@ class STGCNCoSign1s(nn.Module):
         self.gcn_out_dim = COSIGN_BLOCKS[-1][-1]
 
         # TODO: check the actual LSTM input size and put it here
-        self.fusion_out_dim = 512  # this needs to be the size of LSTM input
+        self.fusion_out_dim = 1024
 
         self.offsets = {
             "body": 0,
@@ -104,7 +105,8 @@ class STGCNCoSign1s(nn.Module):
             }
         )
 
-        num_groups_for_fusion = 5  # each per group (face + body + 2 * hand + mouth)
+        # each per group (face + body + 2 * hand + mouth)
+        num_groups_for_fusion = 5
         self.fusion_in_dim = num_groups_for_fusion * self.gcn_out_dim
 
         self.fusion_mlp = nn.Sequential(
@@ -112,18 +114,23 @@ class STGCNCoSign1s(nn.Module):
             nn.BatchNorm1d(self.fusion_out_dim),
             nn.ReLU(),
             nn.Dropout(p=0.2),
-        )  # TODO: in CoSign paper they say smth about Bernouli distribution for dropout - eqn. (4)
+            # TODO: in CoSign paper they say smth about Bernouli distribution for dropout - eqn. (4)
+        )
 
-    def forward(self, x):
+    def forward(self, x, keep_prob=0.8):
         """Forward function of CoSign1s ST-GCN module.
 
         Args:
             x :[Batch, Channels, Timesteps, Vertices] -> [B, 3, T, 553 (or less)]
                 x is original, all-point vector from the .npy files
+            keep_prob: probability of keeping the feature during masking.
 
         Returns:
             v_fused : # frame-wise feature for LSTM
         """
+        if not self.training:
+            keep_prob = 1.0
+
         centralized_groups = {}
         for name in ["body", "face", "mouth", "l_hand", "r_hand"]:
             local_indices = np.array(self.config[name])
@@ -157,10 +164,29 @@ class STGCNCoSign1s(nn.Module):
         # print(f"DEBUG: Shape of one feature: {features[0].shape}")
         v = torch.cat(features, dim=1)  # [B, 320, T]
 
-        # TODO: if we implement dropout mask it will be here
-        # v = v * xi
+        v_groups = torch.stack(features, dim=1)
 
-        v_fused = self.fusion_mlp(v)
+        phi = torch.bernoulli(
+            torch.full(
+                (v_groups.size(0), v_groups.size(1), 1, 1),
+                fill_value=keep_prob,
+                device=v_groups.device,
+                dtype=v_groups.dtype,
+            )
+        )  # [B, 5, 1, 1]
+
+        phi_inv = 1.0 - phi
+        v_masked = v_groups * phi  # [B, 5, 64, T]
+        v_masked_inv = v_groups * phi_inv
+
+        v_masked = v_masked.flatten(1, 2)  # [B, 320, T]
+        v_masked_inv = v_masked_inv.flatten(1, 2)
+
+        v_fused_masked = self.fusion_mlp(v_masked)  # [B, 1024, T]
+        v_fused_masked_inv = self.fusion_mlp(v_masked_inv)
+
+        v_fused = torch.stack(
+            [v_fused_masked, v_fused_masked_inv], dim=1)  # [B, 2, 1024, T]
 
         return v_fused
 
