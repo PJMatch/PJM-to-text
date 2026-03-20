@@ -25,11 +25,12 @@ class CoSignTemporalCNN(nn.Module):
 
     @staticmethod
     def _pool_out_lengths(lengths, kernel_size=2, stride=2, padding=0, dilation=1):
-        return torch.div(
+        out_lengths = torch.div(
             lengths + 2 * padding - dilation * (kernel_size - 1) - 1,
             stride,
             rounding_mode="floor",
         ) + 1
+        return torch.clamp(out_lengths, min=1)
 
     def forward(self, x, lengths=None):
         # x: [B, C, T]
@@ -169,13 +170,14 @@ class CoSign1SModel(nn.Module):
             "logit_lengths": out_lengths,  # [B]
         }
 
-    def forward(self, x, lengths):
+    def forward(self, x, lengths, keep_prob=0.8):
         """
         x:       [B, 3, T, V_total]  (mediapipe skeleton input)
         lengths: [B]  original sequence lengths
+        keep_prob: masking keep probability
         Returns a dict with predictions for both complementary branches.
         """
-        branches = self.STGCN(x) # [B, 2, 1024, T]
+        branches = self.STGCN(x, keep_prob=keep_prob) # [B, 2, 1024, T]
         branch_phi = branches[:, 0, ...]   # [B, 1024, T]
         branch_phi_inv = branches[:, 1, ...]   # [B, 1024, T]
 

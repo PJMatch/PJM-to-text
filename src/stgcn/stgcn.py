@@ -117,16 +117,20 @@ class STGCNCoSign1s(nn.Module):
             # TODO: in CoSign paper they say smth about Bernouli distribution for dropout - eqn. (4)
         )
 
-    def forward(self, x):
+    def forward(self, x, keep_prob=0.8):
         """Forward function of CoSign1s ST-GCN module.
 
         Args:
             x :[Batch, Channels, Timesteps, Vertices] -> [B, 3, T, 553 (or less)]
                 x is original, all-point vector from the .npy files
+            keep_prob: probability of keeping the feature during masking.
 
         Returns:
             v_fused : # frame-wise feature for LSTM
         """
+        if not self.training:
+            keep_prob = 1.0
+
         centralized_groups = {}
         for name in ["body", "face", "mouth", "l_hand", "r_hand"]:
             local_indices = np.array(self.config[name])
@@ -161,8 +165,6 @@ class STGCNCoSign1s(nn.Module):
         v = torch.cat(features, dim=1)  # [B, 320, T]
 
         v_groups = torch.stack(features, dim=1)
-
-        keep_prob = 0.8  # equivalent to dropout p=0.2
 
         phi = torch.bernoulli(
             torch.full(

@@ -61,52 +61,58 @@ def compute_wer(hypotheses, references):
     return jiwer.wer(ref_strs, hyp_strs)
 
 
-def compute_cosign_loss(outputs, targets, target_lengths, criterion, kl_weight=0.1):
+def compute_cosign_loss(outputs, targets, target_lengths, criterion, kl_weight=0.1, keep_prob=0.8):
     """CoSign loss: CTC on all heads + symmetric KL between complementary branches."""
     total_loss = 0.0
 
-    # 1. CTC losses for all 4 prediction heads (2 branches x 2 heads each)
     ctc_losses = []
-    logit_lengths_dict = {}
+    branches_to_train = ["phi"] if keep_prob == 1.0 else ["phi", "phi_inv"]
 
-    for branch in ["phi", "phi_inv"]:
+    for branch in branches_to_train:
         branch_out = outputs[branch]
 
         for head in ["aux_logits", "main_logits"]:
             logits = branch_out[head]  # [B, T', V]
             logit_lengths = branch_out["logit_lengths"]  # [B]
 
+            # PREVENT SEQUENCE LENGTH COLLAPSE
+            collapsed = False
+            for i in range(len(logit_lengths)):
+                if logit_lengths[i] < target_lengths[i]:
+                    logit_lengths[i] = target_lengths[i]
+                    collapsed = True
+            if collapsed and logit_lengths.max() > logits.size(1):
+                pad_len = logit_lengths.max() - logits.size(1)
+                logits = F.pad(logits, (0, 0, 0, pad_len))
+
             log_probs = F.log_softmax(
                 logits, dim=-1).transpose(0, 1)  # [T', B, V]
             ctc_loss = criterion(log_probs, targets,
                                  logit_lengths, target_lengths)
             ctc_losses.append(ctc_loss)
-            logit_lengths_dict[f"{branch}_{head}"] = logit_lengths
 
-    ctc_loss = torch.stack(ctc_losses).mean()  # Average 4 CTC losses
+    ctc_loss = torch.stack(ctc_losses).mean()
     total_loss += ctc_loss
 
-    # 2. Complementary regularization (symmetric KL divergence)
-    # Between auxiliary predictions of phi vs phi_inv
-    aux_phi = F.log_softmax(outputs["phi"]["aux_logits"], dim=-1)
-    aux_phibar = F.log_softmax(outputs["phi_inv"]["aux_logits"], dim=-1)
-    aux_phi_soft = F.softmax(aux_phi, dim=-1)
-    aux_phibar_soft = F.softmax(aux_phibar, dim=-1)
+    if keep_prob < 1.0:
+        aux_phi = F.log_softmax(outputs["phi"]["aux_logits"], dim=-1)
+        aux_phibar = F.log_softmax(outputs["phi_inv"]["aux_logits"], dim=-1)
+        aux_phi_soft = F.softmax(aux_phi, dim=-1)
+        aux_phibar_soft = F.softmax(aux_phibar, dim=-1)
 
-    kl_aux = F.kl_div(aux_phi, aux_phibar_soft, reduction='batchmean') + \
-        F.kl_div(aux_phibar, aux_phi_soft, reduction='batchmean')
+        kl_aux = F.kl_div(aux_phi, aux_phibar_soft, reduction='batchmean') + \
+            F.kl_div(aux_phibar, aux_phi_soft, reduction='batchmean')
 
-    # Between main predictions of phi vs phi_inv
-    main_phi = F.log_softmax(outputs["phi"]["main_logits"], dim=-1)
-    main_phibar = F.log_softmax(outputs["phi_inv"]["main_logits"], dim=-1)
-    main_phi_soft = F.softmax(main_phi, dim=-1)
-    main_phibar_soft = F.softmax(main_phibar, dim=-1)
+        main_phi = F.log_softmax(outputs["phi"]["main_logits"], dim=-1)
+        main_phibar = F.log_softmax(outputs["phi_inv"]["main_logits"], dim=-1)
+        main_phi_soft = F.softmax(main_phi, dim=-1)
+        main_phibar_soft = F.softmax(main_phibar, dim=-1)
 
-    kl_main = F.kl_div(main_phi, main_phibar_soft, reduction='batchmean') + \
-        F.kl_div(main_phibar, main_phi_soft, reduction='batchmean')
+        kl_main = F.kl_div(main_phi, main_phibar_soft, reduction='batchmean') + \
+            F.kl_div(main_phibar, main_phi_soft, reduction='batchmean')
 
-    kl_loss = (kl_aux + kl_main) * 0.5 * kl_weight
-    total_loss += kl_loss
+        kl_loss = (kl_aux + kl_main) * 0.5 * kl_weight
+        total_loss += kl_loss
 
     return total_loss
 
@@ -128,7 +134,7 @@ def evaluate(model, dataloader, criterion, ctc_decoder_obj, id2gloss, device):
 
             outputs = model(frames, frame_lengths)
             loss = compute_cosign_loss(
-                outputs, targets, target_lengths, criterion)
+                outputs, targets, target_lengths, criterion, keep_prob=1.0)
             total_loss += loss.item()
 
             for branch_name in ["phi", "phi_inv"]:
@@ -149,14 +155,13 @@ def evaluate(model, dataloader, criterion, ctc_decoder_obj, id2gloss, device):
                     else:
                         all_hyps_phibar.append(hyp_words)
 
-                    # Reference (once per batch item)
                     ref_words = [id2gloss.get(
                         v.item(), "<unk>") for v in targets[i][:target_lengths[i]] if v.item() != 0]
                     all_refs.append(ref_words)
 
     phi_wer = compute_wer(all_hyps_phi, all_refs[:len(all_hyps_phi)])
     phibar_wer = compute_wer(all_hyps_phibar, all_refs[:len(all_hyps_phibar)])
-    avg_wer = (phi_wer + phibar_wer) / 2
+    avg_wer = phi_wer  # During eval keep_prob=1.0, phi_inv gets zeroed out, so we only care about main branch
     return total_loss / len(dataloader), avg_wer, phi_wer, phibar_wer
 
 
@@ -208,10 +213,15 @@ def main():
         start_epoch, _, _ = load_checkpoint(latest_ckpt, model, optimizer)
 
     best_wer = float('inf')
+    WARMUP_EPOCHS = 10
+
     for epoch in range(start_epoch, EPOCHS):
         model.train()
         total_train_loss = 0
         num_batches = 0
+
+        # Warmup phase without masking
+        current_keep_prob = 1.0 if epoch < WARMUP_EPOCHS else 0.8
 
         for batch_idx, batch in enumerate(train_loader):
             optimizer.zero_grad()
@@ -222,9 +232,9 @@ def main():
             targets = batch["targets"].to(DEVICE)
             target_lengths = batch["target_lengths"].to(DEVICE)
 
-            outputs = model(frames, frame_lengths)
+            outputs = model(frames, frame_lengths, keep_prob=current_keep_prob)
             loss = compute_cosign_loss(
-                outputs, targets, target_lengths, criterion)
+                outputs, targets, target_lengths, criterion, keep_prob=current_keep_prob)
 
             loss.backward()
             torch.nn.utils.clip_grad_norm_(model.parameters(), GRAD_CLIP)
