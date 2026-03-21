@@ -13,6 +13,17 @@ dependencies = [
     "mediapipe",
     "opencv-python",
     "pyyaml>=6.0.3",
+    "flashlight-text>=0.0.7",
+    "grpcio>=1.78.0",
+    "jiwer>=4.0.0",
+    "kenlm>=0.3.0",
+    "markdown>=3.10.2",
+    "protobuf>=7.34.1",
+    "rapidfuzz>=3.14.3",
+    "tensorboard>=2.20.0",
+    "tensorboard-data-server>=0.7.2",
+    "torchaudio>=2.10.0",
+    "werkzeug>=3.1.6",
 ]
 
 [dependency-groups]
