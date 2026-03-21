@@ -90,10 +90,15 @@ class LSTM(nn.Module):
 class SharedGlossHead(nn.Module):
     def __init__(self, feat_dim, vocab_size):
         super().__init__()
-        self.proj = nn.Linear(feat_dim, vocab_size)
+        self.weight = nn.Parameter(torch.empty(vocab_size, feat_dim))
+        nn.init.xavier_uniform_(self.weight)
+        self.scale = 25
 
     def forward(self, x):
-        return self.proj(x)
+        x_norm = F.normalize(x, dim=-1)
+        w_norm = F.normalize(self.weight, dim=-1)
+        sim = torch.matmul(x_norm, w_norm.t())
+        return sim * self.scale
 
 
 class CoSign1SModel(nn.Module):

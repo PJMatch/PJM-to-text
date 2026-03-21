@@ -12,6 +12,7 @@ dependencies = [
     "torch",
     "mediapipe",
     "opencv-python",
+    "pyyaml>=6.0.3",
 ]
 
 [dependency-groups]

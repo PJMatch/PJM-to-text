@@ -111,7 +111,7 @@ class STGCNCoSign1s(nn.Module):
 
         self.fusion_mlp = nn.Sequential(
             nn.Conv1d(self.fusion_in_dim, self.fusion_out_dim, kernel_size=1),
-            nn.BatchNorm1d(self.fusion_out_dim),
+            nn.GroupNorm(32,self.fusion_out_dim),
             nn.ReLU(),
             nn.Dropout(p=0.2),
             # TODO: in CoSign paper they say smth about Bernouli distribution for dropout - eqn. (4)

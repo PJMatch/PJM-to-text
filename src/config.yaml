@@ -1,0 +1,27 @@
+training:
+  epochs: 40
+  batch_size: 8
+  learning_rate: 0.0004
+  weight_decay: 0.0001
+  grad_clip: 1.0
+  keep_prob: 1
+  kl_weight: 0.1
+
+model:
+  dropout: 0.2
+
+data:
+  train_dir: "pheonix-dataset/train"
+  dev_dir: "pheonix-dataset/dev"
+  train_ann: "annotations/PHOENIX-2014-T.train.corpus.csv"
+  dev_ann: "annotations/PHOENIX-2014-T.dev.corpus.csv"
+  num_workers: 4
+  pin_memory: true
+
+optimizer:
+  milestones: [20, 35]
+  gamma: 0.1
+
+system:
+  checkpoint_dir: "checkpoints"
+  device: "auto"
