@@ -168,12 +168,12 @@ class STGCNCoSign1s(nn.Module):
 
         phi = torch.bernoulli(
             torch.full(
-                (v_groups.size(0), v_groups.size(1), 1, 1),
+                (v_groups.size(0), v_groups.size(1), 1, v_groups.size(3)), # <-- Changed the last 1 to v_groups.size(3)
                 fill_value=keep_prob,
                 device=v_groups.device,
                 dtype=v_groups.dtype,
             )
-        )  # [B, 5, 1, 1]
+        )  # [B, 5, 1, T]
 
         phi_inv = 1.0 - phi
         v_masked = v_groups * phi  # [B, 5, 64, T]

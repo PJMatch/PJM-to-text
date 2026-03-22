@@ -85,6 +85,8 @@ class PhoenixDataset(Dataset):
 
         target = torch.tensor(gloss_ids, dtype=torch.long)
 
+        sequence[:, :, 2] = 0.0 # remove Z axis
+
         return {
             "seq_id": seq_id,
             "frames": sequence,

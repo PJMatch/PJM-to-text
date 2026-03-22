@@ -4,8 +4,9 @@ training:
   learning_rate: 0.0004
   weight_decay: 0.0001
   grad_clip: 1.0
-  keep_prob: 1
-  kl_weight: 0.1
+  kl_weight: 0.5
+  lm_model: "4gram.arpa"
+  lexicon: "lexicon.txt"
 
 model:
   dropout: 0.2
@@ -15,7 +16,7 @@ data:
   dev_dir: "pheonix-dataset/dev"
   train_ann: "annotations/PHOENIX-2014-T.train.corpus.csv"
   dev_ann: "annotations/PHOENIX-2014-T.dev.corpus.csv"
-  num_workers: 4
+  num_workers: 10
   pin_memory: true
 
 optimizer:

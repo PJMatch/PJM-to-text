@@ -12,7 +12,6 @@ class CoSignTemporalCNN(nn.Module):
         super().__init__()
 
         self.conv1 = nn.Conv1d(in_dim, hidden_dim, kernel_size=3, padding=1)
-        # Use GroupNorm! It works on Batch Size 1 and ignores padding variance.
         self.norm1 = nn.GroupNorm(32, hidden_dim) 
         self.pool1 = nn.MaxPool1d(kernel_size=2, stride=2)
 
@@ -92,7 +91,7 @@ class SharedGlossHead(nn.Module):
         super().__init__()
         self.weight = nn.Parameter(torch.empty(vocab_size, feat_dim))
         nn.init.xavier_uniform_(self.weight)
-        self.scale = 25
+        self.scale = nn.Parameter(torch.tensor(25.0))
 
     def forward(self, x):
         x_norm = F.normalize(x, dim=-1)
