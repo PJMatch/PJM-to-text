@@ -18,6 +18,29 @@ COSIGN_BLOCKS = [
     [64, 64, 64],  # layer 3
 ]
 
+def _normalize_by_shoulder_width(self, x, left_idx=11, right_idx=12, eps=1e-6):
+    """
+    x: [B, C, T, V]
+    Uses body pose shoulders to scale the whole skeleton so shoulder width ~= 1.
+    """
+    if x.size(-1) <= max(left_idx, right_idx):
+        return x
+
+    left = x[:, :2, :, left_idx]   # [B, 2, T]
+    right = x[:, :2, :, right_idx] # [B, 2, T]
+
+    dist = torch.norm(left - right, dim=1)  # [B, T]
+    valid = dist > eps
+
+    scale = torch.ones(x.size(0), device=x.device, dtype=x.dtype)
+
+    for b in range(x.size(0)):
+        if valid[b].any():
+            scale[b] = dist[b][valid[b]].median()
+
+    scale = scale.view(-1, 1, 1, 1).clamp_min(eps)
+    return x / scale
+
 
 class STGCNArgs:
     """Class that holds specific STGCN configuration arguments.
@@ -130,6 +153,8 @@ class STGCNCoSign1s(nn.Module):
         """
         if not self.training:
             keep_prob = 1.0
+
+        x = _normalize_by_shoulder_width(self, x)
 
         centralized_groups = {}
         for name in ["body", "face", "mouth", "l_hand", "r_hand"]:

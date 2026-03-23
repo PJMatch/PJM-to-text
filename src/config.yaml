@@ -14,8 +14,10 @@ model:
 data:
   train_dir: "pheonix-dataset/train"
   dev_dir: "pheonix-dataset/dev"
+  test_dir: "pheonix-dataset/test"
   train_ann: "annotations/PHOENIX-2014-T.train.corpus.csv"
   dev_ann: "annotations/PHOENIX-2014-T.dev.corpus.csv"
+  test_ann: "annotations/PHOENIX-2014-T.test.corpus.csv"
   num_workers: 10
   pin_memory: true
 
