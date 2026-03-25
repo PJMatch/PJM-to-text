@@ -18,6 +18,29 @@ COSIGN_BLOCKS = [
     [64, 64, 64],  # layer 3
 ]
 
+def _normalize_by_shoulder_width(self, x, left_idx=11, right_idx=12, eps=1e-6):
+    """
+    x: [B, C, T, V]
+    Uses body pose shoulders to scale the whole skeleton so shoulder width ~= 1.
+    """
+    if x.size(-1) <= max(left_idx, right_idx):
+        return x
+
+    left = x[:, :2, :, left_idx]   # [B, 2, T]
+    right = x[:, :2, :, right_idx] # [B, 2, T]
+
+    dist = torch.norm(left - right, dim=1)  # [B, T]
+    valid = dist > eps
+
+    scale = torch.ones(x.size(0), device=x.device, dtype=x.dtype)
+
+    for b in range(x.size(0)):
+        if valid[b].any():
+            scale[b] = dist[b][valid[b]].median()
+
+    scale = scale.view(-1, 1, 1, 1).clamp_min(eps)
+    return x / scale
+
 
 class STGCNArgs:
     """Class that holds specific STGCN configuration arguments.
@@ -111,7 +134,7 @@ class STGCNCoSign1s(nn.Module):
 
         self.fusion_mlp = nn.Sequential(
             nn.Conv1d(self.fusion_in_dim, self.fusion_out_dim, kernel_size=1),
-            nn.BatchNorm1d(self.fusion_out_dim),
+            nn.GroupNorm(32,self.fusion_out_dim),
             nn.ReLU(),
             nn.Dropout(p=0.2),
             # TODO: in CoSign paper they say smth about Bernouli distribution for dropout - eqn. (4)
@@ -130,6 +153,8 @@ class STGCNCoSign1s(nn.Module):
         """
         if not self.training:
             keep_prob = 1.0
+
+        x = _normalize_by_shoulder_width(self, x)
 
         centralized_groups = {}
         for name in ["body", "face", "mouth", "l_hand", "r_hand"]:
@@ -168,12 +193,12 @@ class STGCNCoSign1s(nn.Module):
 
         phi = torch.bernoulli(
             torch.full(
-                (v_groups.size(0), v_groups.size(1), 1, 1),
+                (v_groups.size(0), v_groups.size(1), 1, v_groups.size(3)), # <-- Changed the last 1 to v_groups.size(3)
                 fill_value=keep_prob,
                 device=v_groups.device,
                 dtype=v_groups.dtype,
             )
-        )  # [B, 5, 1, 1]
+        )  # [B, 5, 1, T]
 
         phi_inv = 1.0 - phi
         v_masked = v_groups * phi  # [B, 5, 64, T]
