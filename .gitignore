@@ -1,2 +1,9 @@
 .venv
 .vscode
+**/__pychache__/
+*.pyc
+*.pyo
+*.pyd
+venv/
+__pycache__
+./src/pheonix-dataset
