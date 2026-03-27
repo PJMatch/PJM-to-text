@@ -457,4 +457,4 @@ def synchronous_detect():
 
 
 if __name__ == "__main__":
-    synchronous_detect()
+    asynchronous_detect()
