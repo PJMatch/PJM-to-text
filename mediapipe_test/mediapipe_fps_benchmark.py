@@ -29,14 +29,20 @@ from mediapipe_detection import (
     draw_hand_landmarks_on_image,
     draw_pose_landmarks_on_image,
 )
+from tqdm import tqdm
 
 
 def synchronous_detect_benchmark(show_frames=False):
     """Synchronously detects landmarks and draws them on device camera livestream.
 
     This function provides a synchronous version of detection that displays detected
-    keypoints on the live camera feedback sequentially frame after frame without skiping frames.
+    keypoints on the live camera feedback (or video stream) sequentially frame after frame without
+    skiping frames.
 
+    Args:
+        show_frames(bool): if set to True displays the results of the inference,
+            setting it to True means the test is no longer a valid inference FPS benchmark
+            since displaing the result also takes time
     Returns:
         None
     """
@@ -66,10 +72,6 @@ def synchronous_detect_benchmark(show_frames=False):
     )
     hand_detector = vision.HandLandmarker.create_from_options(hand_options)
 
-    time_prev = time.time()
-    frame_counter = 0
-    last_timestamp_ms = 0
-
     feature_extractor_thread = ThreadPoolExecutor(max_workers=3)
 
     FRAMES_PATH = "./test_9_16_FHD/"
@@ -79,9 +81,20 @@ def synchronous_detect_benchmark(show_frames=False):
     for frame_path in sorted(frames_path.rglob("*.jpg")):
         frame = cv2.imread(frame_path)
         frames.append(frame)
+    frames_repeated = frames * 5
 
-    for frame in frames:
-        # time.sleep(1)
+    # bench prep
+    frame_counter = 0
+    last_timestamp_ms = 0
+    fps_list = []
+
+    time_prev = time.time()
+    bench_start = time_prev
+
+    pbar = tqdm(enumerate(frames_repeated), total=len(frames_repeated), desc="Benchmarking")
+    for id, frame in pbar:
+        # resizing the image to 640x480 gave approx. 10 FPS avg. more on AMD Ryzen 7 8840U
+        # frame = cv2.resize(frame, (640, 480))
         frame_counter += 1
 
         image_rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
@@ -106,6 +119,20 @@ def synchronous_detect_benchmark(show_frames=False):
         pose_result = future_pose.result()
         hand_result = future_hands.result()
 
+        time_now = time.time()
+        time_diff = time_now - time_prev
+
+        if time_diff > 1:
+            fps_text = f"FPS: {frame_counter} | Max: {max(fps_list) if fps_list else 0}"
+            pbar.set_postfix_str(fps_text)
+
+            fps_list.append(frame_counter)
+            frame_counter = 0
+            time_prev = time.time()
+
+        if not show_frames:
+            continue
+
         annotated_image = np.copy(mp_image.numpy_view())
 
         annotated_image = draw_face_landmarks_on_image(annotated_image, face_result)
@@ -114,19 +141,22 @@ def synchronous_detect_benchmark(show_frames=False):
 
         bgr_annotated_image = cv2.cvtColor(annotated_image, cv2.COLOR_RGB2BGR)
 
-        time_now = time.time()
-        time_diff = time_now - time_prev
-        if time_diff > 1:
-            print(f"FPS: {frame_counter}")
-            frame_counter = 0
-            time_prev = time.time()
-
-        if not show_frames:
-            continue
-
         cv2.imshow("mediapipe benchmark", bgr_annotated_image)
         if cv2.waitKey(1) & 0xFF == ord("q"):
             break
+
+    pbar.close()
+
+    bench_stop = time.time()
+    total_time = bench_stop - bench_start
+
+    avg_fps = len(frames_repeated) / total_time
+    lowest = min(fps_list)
+    highest = max(fps_list)
+    print(f"Total time: {total_time}")
+    print(f"Avg FPS: {avg_fps}")
+    print(f"Lowest FPS: {lowest}")
+    print(f"Highest FPS: {highest}")
 
     face_detector.close()
     pose_detector.close()
