@@ -79,6 +79,58 @@ def draw_face_landmarks_on_image(rgb_image: np.ndarray, detection_result):
     return annotated_image
 
 
+def draw_mouth_landmarks_on_image(rgb_image: np.ndarray, detection_result):
+    """Draw specific face landmarks (mouth) on image.
+
+    Args:
+        rgb_image (np.ndarray): image to draw onto,
+        detection_result: result of mediapipe detection
+    Returns:
+        np.ndarray: resulting annotated image
+    """
+    face_landmarks_list = detection_result.face_landmarks
+    annotated_image = np.copy(rgb_image)
+
+    # Get image dimensions to convert normalized coordinates to pixel values
+    height, width, _ = annotated_image.shape
+
+    # Your specific mouth indices
+    mouth_indices = [
+        0,
+        267,
+        269,
+        270,
+        409,
+        306,
+        375,
+        321,
+        405,
+        314,
+        17,
+        84,
+        181,
+        91,
+        146,
+        61,
+        185,
+        40,
+        39,
+        37,
+    ]
+
+    for face_landmarks in face_landmarks_list:
+        for idx in mouth_indices:
+            if idx < len(face_landmarks):
+                landmark = face_landmarks[idx]
+
+                x = int(landmark.x * width)
+                y = int(landmark.y * height)
+
+                cv2.circle(annotated_image, (x, y), radius=2, color=(0, 255, 0), thickness=-1)
+
+    return annotated_image
+
+
 def draw_pose_landmarks_on_image(rgb_image, detection_result):
     """Draw pose landmarks on image.
 
