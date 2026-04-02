@@ -189,6 +189,8 @@ class ChebGraphConv(nn.Module):
         self.Ks = Ks
         self.register_buffer("gso", gso)
 
+        self.edge_importance = nn.Parameter(torch.ones_like(self.gso))
+
         self.weight = nn.Parameter(torch.FloatTensor(Ks, c_in, c_out))
         if bias:
             self.bias = nn.Parameter(torch.FloatTensor(c_out))
@@ -206,6 +208,7 @@ class ChebGraphConv(nn.Module):
     def forward(self, x):
         # bs, c_in, ts, n_vertex = x.shape
         x = torch.permute(x, (0, 2, 3, 1))
+        learned_gso = self.gso * self.edge_importance
 
         if self.Ks - 1 < 0:
             raise ValueError(
@@ -216,15 +219,15 @@ class ChebGraphConv(nn.Module):
             x_list = [x_0]
         elif self.Ks - 1 == 1:
             x_0 = x
-            x_1 = torch.einsum("hi,btij->bthj", self.gso, x)
+            x_1 = torch.einsum("hi,btij->bthj", learned_gso, x)
             x_list = [x_0, x_1]
         elif self.Ks - 1 >= 2:
             x_0 = x
-            x_1 = torch.einsum("hi,btij->bthj", self.gso, x)
+            x_1 = torch.einsum("hi,btij->bthj", learned_gso, x)
             x_list = [x_0, x_1]
             for k in range(2, self.Ks):
                 x_list.append(
-                    torch.einsum("hi,btij->bthj", 2 * self.gso, x_list[k - 1]) - x_list[k - 2]
+                    torch.einsum("hi,btij->bthj", 2 * learned_gso, x_list[k - 1]) - x_list[k - 2]
                 )
 
         x = torch.stack(x_list, dim=2)
