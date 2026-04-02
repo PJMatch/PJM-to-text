@@ -25,3 +25,7 @@ for:
 ```
 to preserve the original size 
 7. Changed *GraphConv* class (*layers.py*) to be compatible with CoSign-proposed [Ks, V, V] GSO shape
+8. Overlayed a parametrized mask onto the GSO in *layers.py* (only in *GraphConv*)
+```
+self.edge_importance = nn.Parameter(torch.ones_like(self.gso))
+```
