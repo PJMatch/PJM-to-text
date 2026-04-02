@@ -1,8 +1,10 @@
 import math
+
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
 import torch.nn.init as init
+
 
 class Align(nn.Module):
     def __init__(self, c_in, c_out):
@@ -16,39 +18,84 @@ class Align(nn.Module):
             x = self.align_conv(x)
         elif self.c_in < self.c_out:
             batch_size, _, timestep, n_vertex = x.shape
-            x = torch.cat([x, torch.zeros([batch_size, self.c_out - self.c_in, timestep, n_vertex]).to(x)], dim=1)
+            x = torch.cat(
+                [x, torch.zeros([batch_size, self.c_out - self.c_in, timestep, n_vertex]).to(x)],
+                dim=1,
+            )
         else:
             x = x
-        
+
         return x
 
+
 class CausalConv1d(nn.Conv1d):
-    def __init__(self, in_channels, out_channels, kernel_size, stride=1, enable_padding=True, dilation=1, groups=1, bias=True):
+    def __init__(
+        self,
+        in_channels,
+        out_channels,
+        kernel_size,
+        stride=1,
+        enable_padding=True,
+        dilation=1,
+        groups=1,
+        bias=True,
+    ):
         if enable_padding == True:
             self.__padding = (kernel_size - 1) * dilation
         else:
             self.__padding = 0
-        super(CausalConv1d, self).__init__(in_channels, out_channels, kernel_size=kernel_size, stride=stride, padding=self.__padding, dilation=dilation, groups=groups, bias=bias)
+        super(CausalConv1d, self).__init__(
+            in_channels,
+            out_channels,
+            kernel_size=kernel_size,
+            stride=stride,
+            padding=self.__padding,
+            dilation=dilation,
+            groups=groups,
+            bias=bias,
+        )
 
     def forward(self, input):
         result = super(CausalConv1d, self).forward(input)
         if self.__padding != 0:
-            return result[: , : , : -self.__padding]
-        
+            return result[:, :, : -self.__padding]
+
         return result
 
+
 class CausalConv2d(nn.Conv2d):
-    def __init__(self, in_channels, out_channels, kernel_size, stride=1, enable_padding=True, dilation=1, groups=1, bias=True):
+    def __init__(
+        self,
+        in_channels,
+        out_channels,
+        kernel_size,
+        stride=1,
+        enable_padding=True,
+        dilation=1,
+        groups=1,
+        bias=True,
+    ):
         kernel_size = nn.modules.utils._pair(kernel_size)
         stride = nn.modules.utils._pair(stride)
         dilation = nn.modules.utils._pair(dilation)
         if enable_padding == True:
-            self.__padding = [int((kernel_size[i] - 1) * dilation[i]) for i in range(len(kernel_size))]
+            self.__padding = [
+                int((kernel_size[i] - 1) * dilation[i]) for i in range(len(kernel_size))
+            ]
         else:
             self.__padding = 0
         self.left_padding = nn.modules.utils._pair(self.__padding)
-        super(CausalConv2d, self).__init__(in_channels, out_channels, kernel_size, stride=stride, padding=0, dilation=dilation, groups=groups, bias=bias)
-        
+        super(CausalConv2d, self).__init__(
+            in_channels,
+            out_channels,
+            kernel_size,
+            stride=stride,
+            padding=0,
+            dilation=dilation,
+            groups=groups,
+            bias=bias,
+        )
+
     def forward(self, input):
         if self.__padding != 0:
             input = F.pad(input, (self.left_padding[1], 0, self.left_padding[0], 0))
@@ -56,18 +103,18 @@ class CausalConv2d(nn.Conv2d):
 
         return result
 
-class TemporalConvLayer(nn.Module):
 
+class TemporalConvLayer(nn.Module):
     # Temporal Convolution Layer (GLU)
     #
     #        |--------------------------------| * residual connection *
     #        |                                |
-    #        |    |--->--- casualconv2d ----- + -------|       
+    #        |    |--->--- casualconv2d ----- + -------|
     # -------|----|                                   ⊙ ------>
-    #             |--->--- casualconv2d --- sigmoid ---|                               
+    #             |--->--- casualconv2d --- sigmoid ---|
     #
-    
-    #param x: tensor, [bs, c_in, ts, n_vertex]
+
+    # param x: tensor, [bs, c_in, ts, n_vertex]
 
     def __init__(self, Kt, c_in, c_out, n_vertex, act_func):
         super(TemporalConvLayer, self).__init__()
@@ -76,48 +123,63 @@ class TemporalConvLayer(nn.Module):
         self.c_out = c_out
         self.n_vertex = n_vertex
         self.align = Align(c_in, c_out)
-        if act_func == 'glu' or act_func == 'gtu':
-            self.causal_conv = CausalConv2d(in_channels=c_in, out_channels=2 * c_out, kernel_size=(Kt, 1), enable_padding=True, dilation=1)
+        if act_func == "glu" or act_func == "gtu":
+            self.causal_conv = CausalConv2d(
+                in_channels=c_in,
+                out_channels=2 * c_out,
+                kernel_size=(Kt, 1),
+                enable_padding=True,
+                dilation=1,
+            )
         else:
-            self.causal_conv = CausalConv2d(in_channels=c_in, out_channels=c_out, kernel_size=(Kt, 1), enable_padding=True, dilation=1)
+            self.causal_conv = CausalConv2d(
+                in_channels=c_in,
+                out_channels=c_out,
+                kernel_size=(Kt, 1),
+                enable_padding=True,
+                dilation=1,
+            )
         self.relu = nn.ReLU()
         self.silu = nn.SiLU()
         self.act_func = act_func
 
-    def forward(self, x):   
+    def forward(self, x):
         x_in = self.align(x)
         x_causal_conv = self.causal_conv(x)
 
-        if self.act_func == 'glu' or self.act_func == 'gtu':
+        if self.act_func == "glu" or self.act_func == "gtu":
             x_p = x_causal_conv[:, : self.c_out, :, :]
-            x_q = x_causal_conv[:, -self.c_out:, :, :]
+            x_q = x_causal_conv[:, -self.c_out :, :, :]
 
-            if self.act_func == 'glu':
+            if self.act_func == "glu":
                 # Explanation of Gated Linear Units (GLU):
-                # The concept of GLU was first introduced in the paper 
-                # "Language Modeling with Gated Convolutional Networks". 
+                # The concept of GLU was first introduced in the paper
+                # "Language Modeling with Gated Convolutional Networks".
                 # URL: https://arxiv.org/abs/1612.08083
-                # In the GLU operation, the input tensor X is divided into two tensors, X_a and X_b, 
+                # In the GLU operation, the input tensor X is divided into two tensors, X_a and X_b,
                 # along a specific dimension.
                 # In PyTorch, GLU is computed as the element-wise multiplication of X_a and sigmoid(X_b).
                 # More information can be found here: https://pytorch.org/docs/master/nn.functional.html#torch.nn.functional.glu
-                # The provided code snippet, (x_p + x_in) ⊙ sigmoid(x_q), is an example of GLU operation. 
+                # The provided code snippet, (x_p + x_in) ⊙ sigmoid(x_q), is an example of GLU operation.
                 x = torch.mul((x_p + x_in), torch.sigmoid(x_q))
 
             else:
                 # tanh(x_p + x_in) ⊙ sigmoid(x_q)
                 x = torch.mul(torch.tanh(x_p + x_in), torch.sigmoid(x_q))
 
-        elif self.act_func == 'relu':
+        elif self.act_func == "relu":
             x = self.relu(x_causal_conv + x_in)
 
-        elif self.act_func == 'silu':
+        elif self.act_func == "silu":
             x = self.silu(x_causal_conv + x_in)
-        
+
         else:
-            raise NotImplementedError(f'ERROR: The activation function {self.act_func} is not implemented.')
-        
+            raise NotImplementedError(
+                f"ERROR: The activation function {self.act_func} is not implemented."
+            )
+
         return x
+
 
 class ChebGraphConv(nn.Module):
     def __init__(self, c_in, c_out, Ks, gso, bias):
@@ -125,12 +187,15 @@ class ChebGraphConv(nn.Module):
         self.c_in = c_in
         self.c_out = c_out
         self.Ks = Ks
-        self.register_buffer('gso', gso)
+        self.register_buffer("gso", gso)
+
+        self.edge_importance = nn.Parameter(torch.ones_like(self.gso))
+
         self.weight = nn.Parameter(torch.FloatTensor(Ks, c_in, c_out))
         if bias:
             self.bias = nn.Parameter(torch.FloatTensor(c_out))
         else:
-            self.register_parameter('bias', None)
+            self.register_parameter("bias", None)
         self.reset_parameters()
 
     def reset_parameters(self):
@@ -139,51 +204,60 @@ class ChebGraphConv(nn.Module):
             fan_in, _ = init._calculate_fan_in_and_fan_out(self.weight)
             bound = 1 / math.sqrt(fan_in) if fan_in > 0 else 0
             init.uniform_(self.bias, -bound, bound)
-    
+
     def forward(self, x):
-        #bs, c_in, ts, n_vertex = x.shape
+        # bs, c_in, ts, n_vertex = x.shape
         x = torch.permute(x, (0, 2, 3, 1))
+        learned_gso = self.gso * self.edge_importance
 
         if self.Ks - 1 < 0:
-            raise ValueError(f'ERROR: the graph convolution kernel size Ks has to be a positive integer, but received {self.Ks}.')  
+            raise ValueError(
+                f"ERROR: the graph convolution kernel size Ks has to be a positive integer, but received {self.Ks}."
+            )
         elif self.Ks - 1 == 0:
             x_0 = x
             x_list = [x_0]
         elif self.Ks - 1 == 1:
             x_0 = x
-            x_1 = torch.einsum('hi,btij->bthj', self.gso, x)
+            x_1 = torch.einsum("hi,btij->bthj", learned_gso, x)
             x_list = [x_0, x_1]
         elif self.Ks - 1 >= 2:
             x_0 = x
-            x_1 = torch.einsum('hi,btij->bthj', self.gso, x)
+            x_1 = torch.einsum("hi,btij->bthj", learned_gso, x)
             x_list = [x_0, x_1]
             for k in range(2, self.Ks):
-                x_list.append(torch.einsum('hi,btij->bthj', 2 * self.gso, x_list[k - 1]) - x_list[k - 2])
-        
+                x_list.append(
+                    torch.einsum("hi,btij->bthj", 2 * learned_gso, x_list[k - 1]) - x_list[k - 2]
+                )
+
         x = torch.stack(x_list, dim=2)
 
-        cheb_graph_conv = torch.einsum('btkhi,kij->bthj', x, self.weight)
+        cheb_graph_conv = torch.einsum("btkhi,kij->bthj", x, self.weight)
 
         if self.bias is not None:
             cheb_graph_conv = torch.add(cheb_graph_conv, self.bias)
         else:
             cheb_graph_conv = cheb_graph_conv
-        
+
         return cheb_graph_conv
+
 
 class GraphConv(nn.Module):
     def __init__(self, c_in, c_out, gso, bias):
         super(GraphConv, self).__init__()
         self.c_in = c_in
         self.c_out = c_out
-        self.register_buffer('gso', gso)
+        self.register_buffer("gso", gso)
         self.Ks = gso.shape[0]
+
+        # add edge importance for parametrized optimization of GSO
+        self.edge_importance = nn.Parameter(torch.ones_like(self.gso))
 
         self.weight = nn.Parameter(torch.FloatTensor(self.Ks, c_in, c_out))
         if bias:
             self.bias = nn.Parameter(torch.FloatTensor(c_out))
         else:
-            self.register_parameter('bias', None)
+            self.register_parameter("bias", None)
         self.reset_parameters()
 
     def reset_parameters(self):
@@ -197,15 +271,18 @@ class GraphConv(nn.Module):
             # init.uniform_(self.bias, -bound, bound)
 
     def forward(self, x):
-        #bs, c_in, ts, n_vertex = x.shape
+        # bs, c_in, ts, n_vertex = x.shape
         x = torch.permute(x, (0, 2, 3, 1))
 
-        graph_conv = torch.einsum('khi,btij,kjm->bthm', self.gso, x, self.weight)
+        learned_gso = self.gso * self.edge_importance
+
+        graph_conv = torch.einsum("khi,btij,kjm->bthm", learned_gso, x, self.weight)
 
         if self.bias is not None:
             graph_conv = torch.add(graph_conv, self.bias)
-        
+
         return graph_conv
+
 
 class GraphConvLayer(nn.Module):
     def __init__(self, graph_conv_type, c_in, c_out, Ks, gso, bias):
@@ -215,22 +292,23 @@ class GraphConvLayer(nn.Module):
         self.c_out = c_out
         self.align = Align(c_in, c_out)
         self.Ks = Ks
-        self.register_buffer('gso', gso)
-        if self.graph_conv_type == 'cheb_graph_conv':
+        self.register_buffer("gso", gso)
+        if self.graph_conv_type == "cheb_graph_conv":
             self.cheb_graph_conv = ChebGraphConv(c_out, c_out, Ks, gso, bias)
-        elif self.graph_conv_type == 'graph_conv':
+        elif self.graph_conv_type == "graph_conv":
             self.graph_conv = GraphConv(c_out, c_out, gso, bias)
 
     def forward(self, x):
         x_gc_in = self.align(x)
-        if self.graph_conv_type == 'cheb_graph_conv':
+        if self.graph_conv_type == "cheb_graph_conv":
             x_gc = self.cheb_graph_conv(x_gc_in)
-        elif self.graph_conv_type == 'graph_conv':
+        elif self.graph_conv_type == "graph_conv":
             x_gc = self.graph_conv(x_gc_in)
         x_gc = x_gc.permute(0, 3, 1, 2)
         x_gc_out = torch.add(x_gc, x_gc_in)
 
         return x_gc_out
+
 
 class STConvBlock(nn.Module):
     # STConv Block contains 'TGTND' structure
@@ -240,7 +318,19 @@ class STConvBlock(nn.Module):
     # N: Layer Normolization
     # D: Dropout
 
-    def __init__(self, Kt, Ks, n_vertex, last_block_channel, channels, act_func, graph_conv_type, gso, bias, droprate):
+    def __init__(
+        self,
+        Kt,
+        Ks,
+        n_vertex,
+        last_block_channel,
+        channels,
+        act_func,
+        graph_conv_type,
+        gso,
+        bias,
+        droprate,
+    ):
         super(STConvBlock, self).__init__()
         self.tmp_conv1 = TemporalConvLayer(Kt, last_block_channel, channels[0], n_vertex, act_func)
         self.graph_conv = GraphConvLayer(graph_conv_type, channels[0], channels[1], Ks, gso, bias)
@@ -259,6 +349,7 @@ class STConvBlock(nn.Module):
 
         return x
 
+
 class OutputBlock(nn.Module):
     # Output block contains 'TNFF' structure
     # T: Gated Temporal Convolution Layer (GLU or GTU)
@@ -266,7 +357,9 @@ class OutputBlock(nn.Module):
     # F: Fully-Connected Layer
     # F: Fully-Connected Layer
 
-    def __init__(self, Ko, last_block_channel, channels, end_channel, n_vertex, act_func, bias, droprate):
+    def __init__(
+        self, Ko, last_block_channel, channels, end_channel, n_vertex, act_func, bias, droprate
+    ):
         super(OutputBlock, self).__init__()
         self.tmp_conv1 = TemporalConvLayer(Ko, last_block_channel, channels[0], n_vertex, act_func)
         self.fc1 = nn.Linear(in_features=channels[0], out_features=channels[1], bias=bias)
