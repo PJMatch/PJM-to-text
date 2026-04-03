@@ -397,7 +397,6 @@ def synchronous_detect():
 
     time_prev = time.time()
     frame_counter = 0
-    last_timestamp_ms = 0
 
     feature_extractor_thread = ThreadPoolExecutor(max_workers=3)
 

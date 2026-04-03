@@ -1,7 +1,12 @@
-"""Module for frames extraction from a video."""
+"""Module for extraction from PJM dataset."""
 
+import numpy as np
 import cv2
 from pathlib import Path
+import time
+import mediapipe as mp
+from mediapipe.tasks import python
+from mediapipe.tasks.python import vision
 
 from extraction_4D_1 import extract_raw_keypoints
 
@@ -29,7 +34,7 @@ def extract_frames(path: str) -> list:
     return frames
 
 
-def get_files_to_process(processed: set):
+def get_files_to_process(processed: set) -> set:
     """Returns files that have not been processed yet."""
     files_mp4 = set()
     for file_mp4 in DATASET_PATH.rglob("*.[mM][pP]4"):
@@ -37,28 +42,32 @@ def get_files_to_process(processed: set):
     
     return files_mp4 - processed
 
-def init_mediapipe():
+def init_mediapipe() -> dict:
     pose_detector = vision.PoseLandmarker.create_from_options(
         vision.PoseLandmarkerOptions(
-            base_options=python.BaseOptions(model_asset_path=POSE_MODEL_PATH),
+            base_options=python.BaseOptions(model_asset_path=str(POSE_MODEL_PATH)),
             running_mode=vision.RunningMode.VIDEO)
     )
 
     hand_detector = vision.HandLandmarker.create_from_options(
         vision.HandLandmarkerOptions(
-            base_options=python.BaseOptions(model_asset_path=HAND_MODEL_PATH),
+            base_options=python.BaseOptions(model_asset_path=str(HAND_MODEL_PATH)),
             running_mode=vision.RunningMode.VIDEO,
             num_hands=2)
     )
     
     face_detector = vision.FaceLandmarker.create_from_options(
         vision.FaceLandmarkerOptions(
-            base_options=python.BaseOptions(model_asset_path=FACE_MODEL_PATH),
+            base_options=python.BaseOptions(model_asset_path=str(FACE_MODEL_PATH)),
             running_mode=vision.RunningMode.VIDEO,
             num_faces=1)
     )
 
-    return pose_detector, hand_detector, face_detector
+    return {
+        "pose": pose_detector,
+        "hands": hand_detector,
+        "face": face_detector
+    }
 
 def get_processed_filenames() -> set:
     """Reads from the log and returns a set (for O(1) lookup time) with processed files."""
@@ -73,18 +82,35 @@ def get_processed_filenames() -> set:
     
     return processed_set
 
-def process_file(pjm_file: Path):
+def run_mp_inference(detectors: dict, frame, timestamp_ms):
+    mp_image = mp.Image(image_format=mp.ImageFormat.SRGB, data=cv2.cvtColor(frame, cv2.COLOR_BGR2RGB))
+    
+    pose_result = detectors["pose"].detect_for_video(mp_image, timestamp_ms) 
+    hands_result = detectors["hands"].detect_for_video(mp_image, timestamp_ms)
+    face_result = detectors["face"].detect_for_video(mp_image, timestamp_ms)
+
+    return pose_result, hands_result, face_result
+
+def process_file(pjm_file: Path, video_fps):
     """Extract keypoints from file and return keypoints sequence."""
     frames = extract_frames(pjm_file)
 
     if len(frames) == 0:
         return pjm_file
 
+    detectors = init_mediapipe()
+
     sequence_data = []
     sequence_name = pjm_file.stem
-    for frame in frames:
-        raw_keypoints = extract_raw_keypoints() 
+
+    last_timestamp_ms = 0
+    for frame_id, frame in enumerate(frames):
+        timestamp_ms = frame_id * 1000 / video_fps
+
+        pose_res, hands_res, face_res = run_mp_inference(detectors, frame, timestamp_ms)
+        raw_keypoints = extract_raw_keypoints(pose_res, hands_res, face_res) 
         sequence_data.append(raw_keypoints)
+
     return sequence_data, sequence_name
 
 def process_pjm():
@@ -99,8 +125,8 @@ def process_pjm():
         processed_log = OUTPUT_PATH / "processed_log.txt"
         with open(processed_log, "a", encoding="utf-8") as f:
             f.write(f"{str(pjm_file)}\n")
-        
-        print(f"Successfully processed file {str(pjm_file)}")
+            print(f"Successfully processed file {str(pjm_file)}")
+
         break
 
     return None
@@ -108,10 +134,10 @@ def process_pjm():
 
 def main():
     res_err = process_pjm()
-    if res != None:
+    if res_err != None:
         print(f"Error occured in file {res_err}")
     else:
         print("Succesfully extracted features from all videos")
 
 if __name__ == "__main__":
-    process_pjm()
+    main()
