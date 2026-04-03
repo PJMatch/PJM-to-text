@@ -21,6 +21,7 @@ which at the time is not available in the new API.
 
 import time
 from concurrent.futures import ThreadPoolExecutor
+from pathlib import Path
 
 import cv2
 import mediapipe as mp
@@ -29,6 +30,9 @@ from mediapipe.tasks import python
 from mediapipe.tasks.python import vision
 from mediapipe.tasks.python.vision import drawing_styles, drawing_utils
 
+
+
+TASKS_DIR = Path("../mediapipe_tasks")
 
 def draw_face_landmarks_on_image(rgb_image: np.ndarray, detection_result):
     """Draw face landmarks on image.
@@ -249,36 +253,32 @@ def asynchronous_detect() -> None:
         None
     """
     # face mesh detector
+    face_model_path = TASKS_DIR / "face_landmarker_v2_with_blendshapes.task"
     face_base_options = python.BaseOptions(
-        model_asset_path="face_landmarker_v2_with_blendshapes.task"
+        model_asset_path=str(face_model_path)
     )
     face_options = vision.FaceLandmarkerOptions(
         base_options=face_base_options,
-        running_mode=vision.RunningMode.LIVE_STREAM,
-        result_callback=face_result_callback,
+        running_mode=vision.RunningMode.VIDEO,
         output_face_blendshapes=True,
         output_facial_transformation_matrixes=True,
         num_faces=1,
     )
     face_detector = vision.FaceLandmarker.create_from_options(face_options)
 
-    # pose detector
-    pose_base_options = python.BaseOptions(model_asset_path="pose_landmarker_lite.task")
+    pose_model_path = TASKS_DIR / "pose_landmarker_lite.task"
+    pose_base_options = python.BaseOptions(model_asset_path=str(pose_model_path))
     pose_options = vision.PoseLandmarkerOptions(
         base_options=pose_base_options,
-        running_mode=vision.RunningMode.LIVE_STREAM,
-        result_callback=pose_result_callback,
+        running_mode=vision.RunningMode.VIDEO,
         output_segmentation_masks=False,
     )
     pose_detector = vision.PoseLandmarker.create_from_options(pose_options)
 
-    # hand landmakr detector
-    hand_base_options = python.BaseOptions(model_asset_path="hand_landmarker.task")
+    hand_model_path = TASKS_DIR / "hand_landmarker.task"
+    hand_base_options = python.BaseOptions(model_asset_path=str(hand_model_path))
     hand_options = vision.HandLandmarkerOptions(
-        base_options=hand_base_options,
-        running_mode=vision.RunningMode.LIVE_STREAM,
-        result_callback=hand_result_callback,
-        num_hands=2,
+        base_options=hand_base_options, running_mode=vision.RunningMode.VIDEO, num_hands=2
     )
     hand_detector = vision.HandLandmarker.create_from_options(hand_options)
 
@@ -364,8 +364,9 @@ def synchronous_detect():
     Returns:
         None
     """
+    face_model_path = TASKS_DIR / "face_landmarker_v2_with_blendshapes.task"
     face_base_options = python.BaseOptions(
-        model_asset_path="face_landmarker_v2_with_blendshapes.task"
+        model_asset_path=str(face_model_path)
     )
     face_options = vision.FaceLandmarkerOptions(
         base_options=face_base_options,
@@ -376,7 +377,8 @@ def synchronous_detect():
     )
     face_detector = vision.FaceLandmarker.create_from_options(face_options)
 
-    pose_base_options = python.BaseOptions(model_asset_path="pose_landmarker_lite.task")
+    pose_model_path = TASKS_DIR / "pose_landmarker_lite.task"
+    pose_base_options = python.BaseOptions(model_asset_path=str(pose_model_path))
     pose_options = vision.PoseLandmarkerOptions(
         base_options=pose_base_options,
         running_mode=vision.RunningMode.VIDEO,
@@ -384,7 +386,8 @@ def synchronous_detect():
     )
     pose_detector = vision.PoseLandmarker.create_from_options(pose_options)
 
-    hand_base_options = python.BaseOptions(model_asset_path="hand_landmarker.task")
+    hand_model_path = TASKS_DIR / "hand_landmarker.task"
+    hand_base_options = python.BaseOptions(model_asset_path=str(hand_model_path))
     hand_options = vision.HandLandmarkerOptions(
         base_options=hand_base_options, running_mode=vision.RunningMode.VIDEO, num_hands=2
     )
