@@ -1,9 +1,14 @@
 """Module for extraction from PJM dataset."""
 
+import os
+
 import numpy as np
 import cv2
 from pathlib import Path
 import time
+from concurrent.futures import ThreadPoolExecutor
+
+os.environ['GLOG_minloglevel'] = '2'
 
 import mediapipe as mp
 from mediapipe.tasks import python
@@ -21,6 +26,8 @@ DATASET_PATH = Path("/pjm/baza_wideo")
 OUTPUT_PATH = Path("/pjm/extracted")
 
 DATASET_FPS = 30
+
+FEATURE_EXTRACTOR_THREAD = ThreadPoolExecutor(max_workers=3)
 
 def extract_frames(path: str):
     """Extract frames from a video."""
@@ -47,23 +54,38 @@ def get_files_to_process(processed: set) -> set:
     
     return files_mp4 - processed
 
-def init_mediapipe() -> dict:
+def load_models_to_memory() -> dict:
+    """Reads the .task files from disk into RAM."""
+    with open(POSE_MODEL_PATH, "rb") as f:
+        pose_bytes = f.read()
+    with open(HAND_MODEL_PATH, "rb") as f:
+        hand_bytes = f.read()
+    with open(FACE_MODEL_PATH, "rb") as f:
+        face_bytes = f.read()
+        
+    return {
+        "pose": pose_bytes,
+        "hands": hand_bytes,
+        "face": face_bytes
+    }
+
+def init_mediapipe(models_buffer: dict) -> dict:
     pose_detector = vision.PoseLandmarker.create_from_options(
         vision.PoseLandmarkerOptions(
-            base_options=python.BaseOptions(model_asset_path=str(POSE_MODEL_PATH)),
+            base_options=python.BaseOptions(model_asset_buffer=models_buffer["pose"]),
             running_mode=vision.RunningMode.VIDEO)
     )
 
     hand_detector = vision.HandLandmarker.create_from_options(
         vision.HandLandmarkerOptions(
-            base_options=python.BaseOptions(model_asset_path=str(HAND_MODEL_PATH)),
+            base_options=python.BaseOptions(model_asset_buffer=models_buffer["hands"]),
             running_mode=vision.RunningMode.VIDEO,
             num_hands=2)
     )
     
     face_detector = vision.FaceLandmarker.create_from_options(
         vision.FaceLandmarkerOptions(
-            base_options=python.BaseOptions(model_asset_path=str(FACE_MODEL_PATH)),
+            base_options=python.BaseOptions(model_asset_buffer=models_buffer["face"]),
             running_mode=vision.RunningMode.VIDEO,
             num_faces=1)
     )
@@ -87,6 +109,25 @@ def get_processed_filenames() -> set:
     
     return processed_set
 
+def run_mp_inference_optim(detectors: dict, frame, timestamp_ms):
+    mp_image = mp.Image(image_format=mp.ImageFormat.SRGB, data=cv2.cvtColor(frame, cv2.COLOR_BGR2RGB))
+    
+    pose = FEATURE_EXTRACTOR_THREAD.submit(
+        detectors["pose"].detect_for_video, mp_image, timestamp_ms 
+    )
+    hands = FEATURE_EXTRACTOR_THREAD.submit(
+        detectors["hands"].detect_for_video, mp_image, timestamp_ms
+    )
+    face = FEATURE_EXTRACTOR_THREAD.submit(
+        detectors["face"].detect_for_video, mp_image, timestamp_ms
+    )
+
+    face_result = face.result()
+    pose_result = pose.result()
+    hands_result = hands.result()
+
+    return pose_result, hands_result, face_result
+
 def run_mp_inference(detectors: dict, frame, timestamp_ms):
     mp_image = mp.Image(image_format=mp.ImageFormat.SRGB, data=cv2.cvtColor(frame, cv2.COLOR_BGR2RGB))
     
@@ -102,12 +143,23 @@ def process_sequence(pjm_file: Path, video_fps, detectors):
     sequence_data = []
     sequence_name = pjm_file.stem
 
+    time_prev = time.time()
+    frame_counter = 0
     for frame_id, frame in extract_frames(pjm_file):
         timestamp_ms = int(frame_id * 1000 / video_fps)
 
-        pose_res, hands_res, face_res = run_mp_inference(detectors, frame, timestamp_ms)
+        pose_res, hands_res, face_res = run_mp_inference_optim(detectors, frame, timestamp_ms)
         raw_keypoints = extract_raw_keypoints(pose_res, hands_res, face_res) 
         sequence_data.append(raw_keypoints)
+        
+        frame_counter += 1
+        time_now = time.time()
+        time_diff = time_now - time_prev
+        
+        if time_diff > 1:
+            print(f"FPS: {frame_counter}")
+            frame_counter = 0
+            time_prev = time.time()
 
     if not sequence_data:
         return None, None
@@ -133,10 +185,22 @@ def process_pjm():
     processed = get_processed_filenames()    
     files_to_process = get_files_to_process(processed)
 
+    models_buffer = load_models_to_memory()
+
     err_file_set = set()
-    detectors = init_mediapipe()
-    for pjm_file in files_to_process:
+
+    for i, pjm_file in enumerate(files_to_process):
         try:
+            # We need to init models  for every file because in VIDEO mode the models require
+            # the timestamp (which is assigned per the model instance) to be always monotonous.
+            # That makes zeroing the timestamp at the beginning of every file an Error.   
+            # Global timestamp also is considered an error since the model will try to 
+            # interpolate between files since it would think that it is still looking at the same
+            # file.
+            # For that we first loaded the models to RAM for faster reintialization
+            detectors = init_mediapipe(models_buffer)
+
+            feature_extractor_thread = ThreadPoolExecutor(max_workers=3)
             if not process_file(pjm_file, detectors):
                 err_file_set.add(str(pjm_file))
                 continue
@@ -145,7 +209,8 @@ def process_pjm():
             err_file_set.add(str(pjm_file))
             continue
 
-        break
+        if i == 2:
+            break
     
     return err_file_set
 
