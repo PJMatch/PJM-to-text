@@ -171,7 +171,7 @@ def process_sequence(pjm_file: Path, video_fps, detectors):
         time_diff = time_now - time_prev
 
         if time_diff > 1:
-            print(f"FPS: {frame_counter}")
+            # print(f"FPS: {frame_counter}")
             frame_counter = 0
             time_prev = time.time()
 

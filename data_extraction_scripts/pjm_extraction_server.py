@@ -68,6 +68,8 @@ def process_pjm():
             pjm_file, success, error_msg, frame_count = future.result()
 
             if success:
+                total_frames += frame_count
+                successful_videos += 1
                 with open(processed_log, "a", encoding="utf-8") as f:
                     f.write(f"{str(pjm_file)}\n")
                 print(f"Successfully processed file {pjm_file.name} ({frame_count} frames)")
