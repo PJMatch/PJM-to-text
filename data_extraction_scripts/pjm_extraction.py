@@ -4,6 +4,7 @@ import numpy as np
 import cv2
 from pathlib import Path
 import time
+
 import mediapipe as mp
 from mediapipe.tasks import python
 from mediapipe.tasks.python import vision
@@ -19,19 +20,23 @@ HAND_MODEL_PATH = TASKS_DIR / "hand_landmarker.task"
 DATASET_PATH = Path("/pjm/baza_wideo")
 OUTPUT_PATH = Path("/pjm/extracted")
 
-def extract_frames(path: str) -> list:
+DATASET_FPS = 30
+
+def extract_frames(path: str):
     """Extract frames from a video."""
-    video = cv2.VideoCapture(path)
+    video = cv2.VideoCapture(str(path))
 
-    frames = []
-    while video.isOpened():
-        ret, frame = video.read()
-        if not ret:
-            break
+    n = 0
+    try:
+        while video.isOpened():
+            ret, frame = video.read()
+            if not ret:
+                break
 
-        frames.append(frame)
-
-    return frames
+            yield n, frame
+            n += 1
+    finally:
+        video.release()
 
 
 def get_files_to_process(processed: set) -> set:
@@ -91,51 +96,63 @@ def run_mp_inference(detectors: dict, frame, timestamp_ms):
 
     return pose_result, hands_result, face_result
 
-def process_file(pjm_file: Path, video_fps):
-    """Extract keypoints from file and return keypoints sequence."""
-    frames = extract_frames(pjm_file)
-
-    if len(frames) == 0:
-        return pjm_file
-
-    detectors = init_mediapipe()
+def process_sequence(pjm_file: Path, video_fps, detectors):
+    """Extract keypoints from file (sequence) and return keypoints sequence."""
 
     sequence_data = []
     sequence_name = pjm_file.stem
 
-    last_timestamp_ms = 0
-    for frame_id, frame in enumerate(frames):
-        timestamp_ms = frame_id * 1000 / video_fps
+    for frame_id, frame in extract_frames(pjm_file):
+        timestamp_ms = int(frame_id * 1000 / video_fps)
 
         pose_res, hands_res, face_res = run_mp_inference(detectors, frame, timestamp_ms)
         raw_keypoints = extract_raw_keypoints(pose_res, hands_res, face_res) 
         sequence_data.append(raw_keypoints)
 
+    if not sequence_data:
+        return None, None
+
     return sequence_data, sequence_name
+
+def process_file(pjm_file, detectors):
+    sequence_data, sequence_name = process_sequence(pjm_file, DATASET_FPS, detectors)
+    if sequence_data is None:
+        print(f"Sequence data is empty in {str(pjm_file)}")
+        return False
+    np.save(OUTPUT_PATH / f"{sequence_name}.npy", np.array(sequence_data, dtype=object))
+
+    processed_log = OUTPUT_PATH / "processed_log.txt"
+    with open(processed_log, "a", encoding="utf-8") as f:
+        f.write(f"{str(pjm_file)}\n")
+        print(f"Successfully processed file {str(pjm_file)}")
+    
+    return True
+
 
 def process_pjm():
     processed = get_processed_filenames()    
     files_to_process = get_files_to_process(processed)
 
-    frames = []
+    err_file_set = set()
+    detectors = init_mediapipe()
     for pjm_file in files_to_process:
-        sequence_data, sequence_name = process_file(pjm_file)
-        np.save(OUTPUT_PATH / f"{sequence_name}.npy", np.array(sequence_data, dtype=object))
-
-        processed_log = OUTPUT_PATH / "processed_log.txt"
-        with open(processed_log, "a", encoding="utf-8") as f:
-            f.write(f"{str(pjm_file)}\n")
-            print(f"Successfully processed file {str(pjm_file)}")
+        try:
+            if not process_file(pjm_file, detectors):
+                err_file_set.add(str(pjm_file))
+                continue
+        except Exception as e:
+            print(f"ERROR processing {pjm_file}: {e}")
+            err_file_set.add(str(pjm_file))
+            continue
 
         break
-
-    return None
-        
+    
+    return err_file_set
 
 def main():
     res_err = process_pjm()
-    if res_err != None:
-        print(f"Error occured in file {res_err}")
+    if res_err:
+        print(f"Error occured in files {res_err}")
     else:
         print("Succesfully extracted features from all videos")
 
