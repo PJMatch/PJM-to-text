@@ -52,7 +52,7 @@ def process_pjm():
     err_file_set = set()
     processed_log = OUTPUT_PATH / "processed_log.txt"
 
-    tasks = [(f, model_buffers, DATASET_FPS) for f in files_to_process]
+    tasks = [(f, model_buffers, DATASET_FPS) for f in files_to_process][:20]
 
     MAX_WORKERS = 12
 
