@@ -1,9 +1,6 @@
 """Module for extraction from PJM dataset oprimized for the Threadripper."""
 
-import os
-import sys
 from concurrent.futures import ProcessPoolExecutor, as_completed
-from contextlib import contextmanager
 
 import numpy as np
 from pjm_extraction import (
@@ -17,28 +14,12 @@ from pjm_extraction import (
 )
 
 
-@contextmanager
-def suppress_cpp_warnings():
-    """Temporarily redirects OS-level stderr to a black hole to silence C++ prints."""
-    devnull_fd = os.open(os.devnull, os.O_WRONLY)
-    saved_stderr_fd = os.dup(sys.stderr.fileno())
-
-    try:
-        os.dup2(devnull_fd, sys.stderr.fileno())
-        yield
-    finally:
-        os.dup2(saved_stderr_fd, sys.stderr.fileno())
-        os.close(devnull_fd)
-        os.close(saved_stderr_fd)
-
-
 def process_file_worker(args):
     pjm_file, model_buffers, fps = args
 
     detectors = None
     try:
-        with suppress_cpp_warnings():
-            detectors = init_mediapipe(model_buffers)
+        detectors = init_mediapipe(model_buffers)
         sequence_data, sequence_name = process_sequence(pjm_file, fps, detectors)
 
         if sequence_data is None:

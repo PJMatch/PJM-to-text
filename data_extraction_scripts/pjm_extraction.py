@@ -1,19 +1,36 @@
 """Module for extraction from PJM dataset."""
 
 import os
+import sys
 import time
 from concurrent.futures import ThreadPoolExecutor
+from contextlib import contextmanager
 from pathlib import Path
 
 import cv2
 import numpy as np
-
-os.environ["GLOG_minloglevel"] = "2"
-
-import mediapipe as mp
 from extraction_4D_1 import extract_raw_keypoints
-from mediapipe.tasks import python
-from mediapipe.tasks.python import vision
+
+
+@contextmanager
+def suppress_cpp_warnings():
+    """Temporarily redirects OS-level stderr to silence C++ prints."""
+    devnull_fd = os.open(os.devnull, os.O_WRONLY)
+    saved_stderr_fd = os.dup(sys.stderr.fileno())
+
+    try:
+        os.dup2(devnull_fd, sys.stderr.fileno())
+        yield
+    finally:
+        os.dup2(saved_stderr_fd, sys.stderr.fileno())
+        os.close(devnull_fd)
+        os.close(saved_stderr_fd)
+
+
+with suppress_cpp_warnings():
+    import mediapipe as mp
+    from mediapipe.tasks import python
+    from mediapipe.tasks.python import vision
 
 TASKS_DIR = Path("../mediapipe_tasks")
 FACE_MODEL_PATH = TASKS_DIR / "face_landmarker_v2_with_blendshapes.task"
