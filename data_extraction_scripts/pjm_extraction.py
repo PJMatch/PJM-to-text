@@ -1,6 +1,7 @@
 """Module for extraction from PJM dataset."""
 
 import time
+import json
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 
@@ -41,12 +42,23 @@ def extract_frames(path: str):
         video.release()
 
 
+def is_recorded_correctly(file_path: Path):
+    """Returns True if the file has been maked as recorded correctly"""
+    path_str = str(file_path)
+    no_extention = path_str[:path_str.find(".")]
+    json_path = str(no_extention) + '.json'
+    with open(json_path, 'r') as json_file:
+        data = json.load(json_file) 
+        return data["recorded_correctly"] 
+
 def get_files_to_process(processed: set) -> set:
     """Returns files that have not been processed yet."""
     files_mp4 = set()
     for file_mp4 in DATASET_PATH.rglob("*.[mM][pP]4"):
+        if not is_recorded_correctly(file_mp4):
+            continue
         files_mp4.add(file_mp4)
-
+    
     return files_mp4 - processed
 
 
@@ -250,4 +262,5 @@ def main():
 
 
 if __name__ == "__main__":
-    main()
+    # main()
+    print(is_recorded_correctly('/pjm/baza_wideo/17_185_20260401_173103.mp4'))
