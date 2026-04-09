@@ -7,4 +7,4 @@
 venv/
 __pycache__
 ./src/pheonix-dataset
-src
+src/pheonix-dataset
