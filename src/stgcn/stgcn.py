@@ -18,6 +18,7 @@ COSIGN_BLOCKS = [
     [64, 64, 64],  # layer 3
 ]
 
+
 def _normalize_by_shoulder_width(self, x, left_idx=11, right_idx=12, eps=1e-6):
     """
     x: [B, C, T, V]
@@ -26,8 +27,8 @@ def _normalize_by_shoulder_width(self, x, left_idx=11, right_idx=12, eps=1e-6):
     if x.size(-1) <= max(left_idx, right_idx):
         return x
 
-    left = x[:, :2, :, left_idx]   # [B, 2, T]
-    right = x[:, :2, :, right_idx] # [B, 2, T]
+    left = x[:, :2, :, left_idx]  # [B, 2, T]
+    right = x[:, :2, :, right_idx]  # [B, 2, T]
 
     dist = torch.norm(left - right, dim=1)  # [B, T]
     valid = dist > eps
@@ -134,7 +135,7 @@ class STGCNCoSign1s(nn.Module):
 
         self.fusion_mlp = nn.Sequential(
             nn.Conv1d(self.fusion_in_dim, self.fusion_out_dim, kernel_size=1),
-            nn.GroupNorm(32,self.fusion_out_dim),
+            nn.GroupNorm(32, self.fusion_out_dim),
             nn.ReLU(),
             nn.Dropout(p=0.2),
             # TODO: in CoSign paper they say smth about Bernouli distribution for dropout - eqn. (4)
@@ -193,7 +194,12 @@ class STGCNCoSign1s(nn.Module):
 
         phi = torch.bernoulli(
             torch.full(
-                (v_groups.size(0), v_groups.size(1), 1, v_groups.size(3)), # <-- Changed the last 1 to v_groups.size(3)
+                (
+                    v_groups.size(0),
+                    v_groups.size(1),
+                    1,
+                    v_groups.size(3),
+                ),  # <-- Changed the last 1 to v_groups.size(3)
                 fill_value=keep_prob,
                 device=v_groups.device,
                 dtype=v_groups.dtype,
@@ -210,8 +216,7 @@ class STGCNCoSign1s(nn.Module):
         v_fused_masked = self.fusion_mlp(v_masked)  # [B, 1024, T]
         v_fused_masked_inv = self.fusion_mlp(v_masked_inv)
 
-        v_fused = torch.stack(
-            [v_fused_masked, v_fused_masked_inv], dim=1)  # [B, 2, 1024, T]
+        v_fused = torch.stack([v_fused_masked, v_fused_masked_inv], dim=1)  # [B, 2, 1024, T]
 
         return v_fused
 
