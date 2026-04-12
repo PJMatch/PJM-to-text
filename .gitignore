@@ -9,5 +9,5 @@ __pycache__
 ./src/pheonix-dataset
 src/pheonix-dataset
 *.pth
-src/checkpoints/
-src/checkpoints_553/
+src
+*.task
