@@ -24,6 +24,7 @@ dependencies = [
     "tensorboard-data-server>=0.7.2",
     "torchaudio>=2.10.0",
     "werkzeug>=3.1.6",
+    "setuptools<82",
 ]
 
 [dependency-groups]
