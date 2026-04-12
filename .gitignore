@@ -8,3 +8,6 @@ venv/
 __pycache__
 ./src/pheonix-dataset
 src/pheonix-dataset
+*.pth
+src/checkpoints/
+src/checkpoints_553/

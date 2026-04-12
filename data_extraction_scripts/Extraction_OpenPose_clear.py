@@ -16,7 +16,10 @@ import sys
 from typing import List
 import numpy as np
 
-def run_openpose_on_images(openpose_bin: str, openpose_root: str, image_dir: str, temp_json_dir: str) -> None:
+
+def run_openpose_on_images(
+    openpose_bin: str, openpose_root: str, image_dir: str, temp_json_dir: str
+) -> None:
     os.makedirs(temp_json_dir, exist_ok=True)
 
     if not os.path.exists(openpose_bin):
@@ -25,17 +28,24 @@ def run_openpose_on_images(openpose_bin: str, openpose_root: str, image_dir: str
 
     command = [
         openpose_bin,
-        "--image_dir", image_dir,
-        "--write_json", temp_json_dir,
+        "--image_dir",
+        image_dir,
+        "--write_json",
+        temp_json_dir,
         "--hand",
         "--face",
-        "--display", "0",
-        "--render_pose", "0",
-        "--number_people_max", "1", 
-        "--net_resolution", "-1x256" 
+        "--display",
+        "0",
+        "--render_pose",
+        "0",
+        "--number_people_max",
+        "1",
+        "--net_resolution",
+        "-1x256",
     ]
 
     subprocess.run(command, check=True, cwd=openpose_root)
+
 
 def convert_jsons_to_cosign_tensor(json_dir: str, output_npy_path: str) -> None:
     json_files = sorted(glob.glob(os.path.join(json_dir, "*.json")))
@@ -62,14 +72,19 @@ def convert_jsons_to_cosign_tensor(json_dir: str, output_npy_path: str) -> None:
 
         face_raw = np.array(person["face_keypoints_2d"]).reshape(70, 3)
         mouth_pts = face_raw[list(range(60, 68))]
-        face_pts = face_raw[[17, 18, 19, 20, 21, 22, 23, 24, 25, 26, 36, 37, 38, 39, 42, 43, 44, 45]]
+        face_pts = face_raw[
+            [17, 18, 19, 20, 21, 22, 23, 24, 25, 26, 36, 37, 38, 39, 42, 43, 44, 45]
+        ]
 
-        video_data[t] = np.concatenate([body_pts, left_hand_pts, right_hand_pts, mouth_pts, face_pts], axis=0) 
+        video_data[t] = np.concatenate(
+            [body_pts, left_hand_pts, right_hand_pts, mouth_pts, face_pts], axis=0
+        )
 
     cosign_tensor = np.transpose(video_data, (2, 0, 1))
     cosign_tensor = np.expand_dims(cosign_tensor, axis=-1)
 
     np.save(output_npy_path, cosign_tensor)
+
 
 def process_dataset_folders(openpose_bin: str, openpose_root: str, base_folders: List[str]) -> None:
     temp_workspace = os.path.join(os.getcwd(), "temp_openpose_jsons")
@@ -80,34 +95,47 @@ def process_dataset_folders(openpose_bin: str, openpose_root: str, base_folders:
 
         print(f"Processing split: {os.path.basename(base_folder)}")
         subdirs = [f.path for f in os.scandir(base_folder) if f.is_dir()]
-        
+
         for seq_dir in subdirs:
             seq_name = os.path.basename(seq_dir)
             output_npy_path = os.path.join(seq_dir, f"{seq_name}.npy")
-            
+
             if not glob.glob(os.path.join(seq_dir, "*.png")):
                 continue
 
             run_openpose_on_images(openpose_bin, openpose_root, seq_dir, temp_workspace)
             convert_jsons_to_cosign_tensor(temp_workspace, output_npy_path)
-            
+
             if os.path.exists(temp_workspace):
                 shutil.rmtree(temp_workspace)
 
+
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="Run OpenPose and convert to CoSign format.")
-    parser.add_argument("--openpose_root", type=str, required=True, help="Path to OpenPose root directory (containing models/)")
-    parser.add_argument("--openpose_bin", type=str, required=True, help="Path to OpenPose executable (.exe or .bin)")
-    parser.add_argument("--dataset_dir", type=str, required=True, help="Path to dataset containing train/dev/test directories")
-    
+    parser.add_argument(
+        "--openpose_root",
+        type=str,
+        required=True,
+        help="Path to OpenPose root directory (containing models/)",
+    )
+    parser.add_argument(
+        "--openpose_bin", type=str, required=True, help="Path to OpenPose executable (.exe or .bin)"
+    )
+    parser.add_argument(
+        "--dataset_dir",
+        type=str,
+        required=True,
+        help="Path to dataset containing train/dev/test directories",
+    )
+
     args = parser.parse_args()
 
     target_folders = [
         os.path.join(args.dataset_dir, "train"),
         os.path.join(args.dataset_dir, "dev"),
-        os.path.join(args.dataset_dir, "test")
+        os.path.join(args.dataset_dir, "test"),
     ]
-    
+
     print("Start")
     process_dataset_folders(args.openpose_bin, args.openpose_root, target_folders)
     print("Success")

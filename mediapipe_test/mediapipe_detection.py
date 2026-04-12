@@ -31,8 +31,8 @@ from mediapipe.tasks.python import vision
 from mediapipe.tasks.python.vision import drawing_styles, drawing_utils
 
 
-
 TASKS_DIR = Path("../mediapipe_tasks")
+
 
 def draw_face_landmarks_on_image(rgb_image: np.ndarray, detection_result):
     """Draw face landmarks on image.
@@ -304,9 +304,7 @@ def asynchronous_detect() -> None:
     """
     # face mesh detector
     face_model_path = TASKS_DIR / "face_landmarker_v2_with_blendshapes.task"
-    face_base_options = python.BaseOptions(
-        model_asset_path=str(face_model_path)
-    )
+    face_base_options = python.BaseOptions(model_asset_path=str(face_model_path))
     face_options = vision.FaceLandmarkerOptions(
         base_options=face_base_options,
         running_mode=vision.RunningMode.VIDEO,
@@ -415,9 +413,7 @@ def synchronous_detect():
         None
     """
     face_model_path = TASKS_DIR / "face_landmarker_v2_with_blendshapes.task"
-    face_base_options = python.BaseOptions(
-        model_asset_path=str(face_model_path)
-    )
+    face_base_options = python.BaseOptions(model_asset_path=str(face_model_path))
     face_options = vision.FaceLandmarkerOptions(
         base_options=face_base_options,
         running_mode=vision.RunningMode.VIDEO,
