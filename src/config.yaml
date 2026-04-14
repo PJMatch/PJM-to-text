@@ -12,13 +12,13 @@ model:
   dropout: 0.2
 
 data:
-  train_dir: "pheonix-dataset/train"
-  dev_dir: "pheonix-dataset/dev"
-  test_dir: "pheonix-dataset/test"
+  train_dir: "pheonix-dataset_mediapipe/train"
+  dev_dir: "pheonix-dataset_mediapipe/dev"
+  test_dir: "pheonix-dataset_mediapipe/test"
   train_ann: "annotations/PHOENIX-2014-T.train.corpus.csv"
   dev_ann: "annotations/PHOENIX-2014-T.dev.corpus.csv"
   test_ann: "annotations/PHOENIX-2014-T.test.corpus.csv"
-  num_workers: 10
+  num_workers: 8
   pin_memory: true
 
 optimizer:
@@ -28,3 +28,11 @@ optimizer:
 system:
   checkpoint_dir: "checkpoints"
   device: "auto"
+
+logging:
+  tensorboard: true
+  wandb: false
+  log_interval: 100
+  histogram_interval: 100
+  gradient_interval: 100
+  log_dir: "runs"

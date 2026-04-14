@@ -1,4 +1,5 @@
 import os
+import time
 
 import jiwer
 import torch
@@ -7,6 +8,14 @@ import torch.nn.functional as F
 import torch.optim as optim
 import yaml
 from torch.utils.data import DataLoader
+from torch.utils.tensorboard import SummaryWriter
+
+try:
+    import wandb
+
+    WANDB_AVAILABLE = True
+except ImportError:
+    WANDB_AVAILABLE = False
 
 from model import CoSign1SModel
 from phoenix_dataloader import PhoenixDataset, build_gloss_vocab, phoenix_ctc_collate_fn
@@ -14,7 +23,8 @@ from phoenix_dataloader import PhoenixDataset, build_gloss_vocab, phoenix_ctc_co
 
 def load_config(config_path="config.yaml"):
     with open(config_path, "r") as f:
-        return yaml.safe_load(f)
+        config = yaml.safe_load(f)
+    return config
 
 
 config = load_config()
@@ -40,6 +50,14 @@ NUM_WORKERS = config["data"]["num_workers"]
 PIN_MEMORY = config["data"]["pin_memory"]
 
 MODEL_DROPOUT = config["model"]["dropout"]
+
+# Logging configuration
+LOG_TENSORBOARD = config["logging"]["tensorboard"]
+LOG_WANDB = config["logging"]["wandb"] and WANDB_AVAILABLE
+LOG_INTERVAL = config["logging"]["log_interval"]
+HISTOGRAM_INTERVAL = config["logging"]["histogram_interval"]
+GRADIENT_INTERVAL = config["logging"]["gradient_interval"]
+LOG_DIR = config["logging"]["log_dir"]
 
 OPTIMIZER_MILESTONES = config["optimizer"]["milestones"]
 OPTIMIZER_GAMMA = float(config["optimizer"]["gamma"])
@@ -91,7 +109,9 @@ def compute_cosign_loss(
             loss = criterion(log_probs, targets, logit_lengths, target_lengths)
             ctc_losses.append(loss)
 
-    total_loss += torch.stack(ctc_losses).mean()
+    ctc_loss = torch.stack(ctc_losses).mean()
+    total_loss = ctc_loss
+    kl_loss = torch.tensor(0.0, device=ctc_loss.device)
 
     if keep_prob < 1.0:
         T_prime = outputs["phi"]["aux_logits"].size(1)
@@ -119,11 +139,15 @@ def compute_cosign_loss(
         kl_loss = (kl_aux + kl_main) * 0.5 * kl_weight
         total_loss += kl_loss
 
-    return total_loss
+    return {
+        "total": total_loss,
+        "ctc": ctc_loss,
+        "kl": kl_loss,
+    }
 
 
 def evaluate(model, dataloader, criterion, id2gloss, device):
-    """Evaluates the model using GPU Greedy Decode."""
+    """Greedy decode evaluation."""
     model.eval()
     total_loss = 0.0
     all_hyps_phi, all_refs = [], []
@@ -136,48 +160,41 @@ def evaluate(model, dataloader, criterion, id2gloss, device):
             target_lengths = batch["target_lengths"].to(device)
 
             outputs = model(frames, frame_lengths, keep_prob=1.0)
-
-            loss = compute_cosign_loss(
-                outputs, targets, target_lengths, criterion, kl_weight=0.0, keep_prob=1.0
-            )
-            total_loss += loss.item()
+            loss_dict = compute_cosign_loss(outputs, targets, target_lengths, criterion, kl_weight=0.0, keep_prob=1.0)
+            total_loss += loss_dict["total"].item()
 
             logits = outputs["phi"]["main_logits"]
             seq_lengths = outputs["phi"]["logit_lengths"]
-
             preds = torch.argmax(logits, dim=-1)
 
             for i in range(targets.size(0)):
                 hyp = []
                 prev_token = -1
-
                 for t in range(seq_lengths[i]):
                     token = preds[i, t].item()
                     if token != 0 and token != prev_token:
                         hyp.append(token)
                     prev_token = token
-
                 all_hyps_phi.append([id2gloss.get(v, "") for v in hyp])
 
-                ref = [
-                    id2gloss.get(v.item(), "")
-                    for v in targets[i][: target_lengths[i]]
-                    if v.item() != 0
-                ]
+                ref = [id2gloss.get(v.item(), "") for v in targets[i][:target_lengths[i]] if v.item() != 0]
                 all_refs.append(ref)
 
     avg_wer = compute_wer(all_hyps_phi, all_refs)
-
-    for i in range(min(3, len(all_refs))):
-        print(f"TARGET   : {' '.join(all_refs[i])}")
-        print(f"PHI PRED : {' '.join(all_hyps_phi[i])}")
-        print()
+    for i in range(min(2, len(all_refs))):
+        print(f"Target: {' '.join(all_refs[i])}")
+        print(f"Pred:   {' '.join(all_hyps_phi[i])}\n")
 
     return total_loss / len(dataloader), avg_wer
 
 
 def main():
     os.makedirs(CHECKPOINT_DIR, exist_ok=True)
+
+    run_id = f"cosign_{time.strftime('%Y%m%d_%H%M%S')}"
+    tb_writer = SummaryWriter(os.path.join(LOG_DIR, run_id)) if LOG_TENSORBOARD else None
+    if LOG_WANDB:
+        wandb.init(project="cosign-sign-language", name=run_id, config=config, dir=LOG_DIR)
 
     print("Building vocabulary")
     gloss2id, id2gloss = build_gloss_vocab([ANN_TRAIN, ANN_DEV])
@@ -204,6 +221,7 @@ def main():
         pin_memory=PIN_MEMORY,
     )
 
+    total_train_batches = len(train_loader)
     print(f"Initializing model on {DEVICE}")
     model = CoSign1SModel(num_classes=num_classes, dropout=MODEL_DROPOUT)
     model.to(DEVICE)
@@ -235,6 +253,7 @@ def main():
         print(f"Epoch {epoch + 1:3d} | Learning rate: {current_lr:.2e}")
 
         for batch_idx, batch in enumerate(train_loader):
+            global_step = epoch * total_train_batches + batch_idx
             optimizer.zero_grad()
 
             frames = batch["frames"].to(DEVICE).permute(0, 3, 1, 2)
@@ -248,7 +267,7 @@ def main():
 
             outputs = model(frames, frame_lengths, keep_prob=dynamic_keep_prob)
 
-            loss = compute_cosign_loss(
+            loss_dict = compute_cosign_loss(
                 outputs,
                 targets,
                 target_lengths,
@@ -256,25 +275,51 @@ def main():
                 kl_weight=KL_WEIGHT,
                 keep_prob=dynamic_keep_prob,
             )
+            loss = loss_dict["total"]
+            ctc_loss = loss_dict["ctc"]
+            kl_loss = loss_dict["kl"]
 
             loss.backward()
-            torch.nn.utils.clip_grad_norm_(model.parameters(), GRAD_CLIP)
+            grad_norm = torch.nn.utils.clip_grad_norm_(model.parameters(), GRAD_CLIP)
             optimizer.step()
+
+            if batch_idx % LOG_INTERVAL == 0:
+                metrics = {
+                    "train/loss": loss.item(),
+                    "train/ctc": ctc_loss.item(),
+                    "train/kl": kl_loss.item(),
+                    "train/grad_norm": grad_norm.item(),
+                    "train/keep_prob": dynamic_keep_prob,
+                    "train/lr": current_lr,
+                    "train/scale": model.gloss_head.scale.item(),
+                }
+                if tb_writer:
+                    for k, v in metrics.items():
+                        tb_writer.add_scalar(k, v, global_step)
+                if LOG_WANDB:
+                    wandb.log(metrics, step=global_step)
 
             total_train_loss += loss.item()
             num_batches += 1
 
             if batch_idx % 100 == 0:
-                print(
-                    f"  Batch {batch_idx + 1}/{len(train_loader)} | Loss: {loss.item():.4f} | keep_prob: {dynamic_keep_prob:.2f}"
-                )
+                print(f"  Batch {batch_idx + 1}/{len(train_loader)} | Loss: {loss.item():.4f}")
 
         avg_train_loss = total_train_loss / num_batches
-
         val_loss, avg_wer = evaluate(model, dev_loader, criterion, id2gloss, DEVICE)
 
-        print(f"Train Loss: {avg_train_loss:.4f} | Val Loss: {val_loss:.4f}")
-        print(f"WER: {avg_wer:.3f}")
+        epoch_metrics = {
+            "val/loss": val_loss,
+            "val/wer": avg_wer,
+            "train/avg_loss": avg_train_loss,
+        }
+        if tb_writer:
+            for k, v in epoch_metrics.items():
+                tb_writer.add_scalar(k, v, epoch + 1)
+        if LOG_WANDB:
+            wandb.log(epoch_metrics, step=epoch + 1)
+
+        print(f"Epoch {epoch+1} done. Train: {avg_train_loss:.4f}, Val: {val_loss:.4f}, WER: {avg_wer:.3f}")
 
         save_checkpoint(model, optimizer, epoch + 1, gloss2id, val_loss, latest_ckpt)
 
@@ -283,6 +328,11 @@ def main():
             best_path = os.path.join(CHECKPOINT_DIR, "best_model.pth")
             save_checkpoint(model, optimizer, epoch + 1, gloss2id, val_loss, best_path)
             print(f"-> NEW BEST WER: {best_wer:.3f}")
+
+    if tb_writer:
+        tb_writer.close()
+    if LOG_WANDB:
+        wandb.finish()
 
 
 if __name__ == "__main__":

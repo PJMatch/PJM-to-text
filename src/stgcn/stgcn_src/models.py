@@ -122,7 +122,7 @@ class STGCNGraphConv(nn.Module):
                 )
             )
         self.st_blocks = nn.Sequential(*modules)
-        
+
         # rest is unnecessary since we don't use the output classification layers
 
         # Ko = args.n_his - (len(blocks) - 3) * 2 * (args.Kt - 1)

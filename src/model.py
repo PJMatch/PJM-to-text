@@ -12,7 +12,7 @@ class CoSignTemporalCNN(nn.Module):
         super().__init__()
 
         self.conv1 = nn.Conv1d(in_dim, hidden_dim, kernel_size=3, padding=1)
-        self.norm1 = nn.GroupNorm(32, hidden_dim) 
+        self.norm1 = nn.GroupNorm(32, hidden_dim)
         self.pool1 = nn.MaxPool1d(kernel_size=2, stride=2)
 
         self.conv2 = nn.Conv1d(hidden_dim, hidden_dim, kernel_size=3, padding=1)
@@ -24,11 +24,14 @@ class CoSignTemporalCNN(nn.Module):
 
     @staticmethod
     def _pool_out_lengths(lengths, kernel_size=2, stride=2, padding=0, dilation=1):
-        out_lengths = torch.div(
-            lengths + 2 * padding - dilation * (kernel_size - 1) - 1,
-            stride,
-            rounding_mode="floor",
-        ) + 1
+        out_lengths = (
+            torch.div(
+                lengths + 2 * padding - dilation * (kernel_size - 1) - 1,
+                stride,
+                rounding_mode="floor",
+            )
+            + 1
+        )
         return torch.clamp(out_lengths, min=1)
 
     def forward(self, x, lengths=None):
@@ -154,8 +157,7 @@ class CoSign1SModel(nn.Module):
         B, C, T_prime = cnn_feat.shape
         device = cnn_feat.device
 
-        time_steps = torch.arange(
-            T_prime, device=device).unsqueeze(0)  # [1, T']
+        time_steps = torch.arange(T_prime, device=device).unsqueeze(0)  # [1, T']
         length_tensor = out_lengths.unsqueeze(1)  # [B, 1]
 
         mask = time_steps < length_tensor
@@ -163,16 +165,16 @@ class CoSign1SModel(nn.Module):
 
         cnn_feat = cnn_feat * mask
 
-        aux_feat = cnn_feat.transpose(1, 2)        # [B, T', 1024]
-        aux_logits = self.gloss_head(aux_feat)     # [B, T', V]
+        aux_feat = cnn_feat.transpose(1, 2)  # [B, T', 1024]
+        aux_logits = self.gloss_head(aux_feat)  # [B, T', V]
 
         lstm_out = self.context_lstm(cnn_feat, out_lengths)
-        main_logits = self.gloss_head(lstm_out)    # [B, T', V]
+        main_logits = self.gloss_head(lstm_out)  # [B, T', V]
 
         return {
-            "cnn_feat": cnn_feat,          # [B, 1024, T']
-            "aux_logits": aux_logits,      # [B, T', V]
-            "main_logits": main_logits,    # [B, T', V]
+            "cnn_feat": cnn_feat,  # [B, 1024, T']
+            "aux_logits": aux_logits,  # [B, T', V]
+            "main_logits": main_logits,  # [B, T', V]
             "logit_lengths": out_lengths,  # [B]
         }
 
@@ -184,8 +186,8 @@ class CoSign1SModel(nn.Module):
         Returns a dict with predictions for both complementary branches.
         """
         branches = self.STGCN(x, keep_prob=keep_prob)  # [B, 2, 1024, T]
-        branch_phi = branches[:, 0, ...]   # [B, 1024, T]
-        branch_phi_inv = branches[:, 1, ...]   # [B, 1024, T]
+        branch_phi = branches[:, 0, ...]  # [B, 1024, T]
+        branch_phi_inv = branches[:, 1, ...]  # [B, 1024, T]
 
         out_phi = self._forward_branch(branch_phi, lengths)
         out_phi_inv = self._forward_branch(branch_phi_inv, lengths)

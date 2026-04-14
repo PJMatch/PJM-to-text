@@ -43,19 +43,24 @@ def build_lm_decoder(id2gloss, config, args):
     lexicon_path = config["training"].get("lexicon", None)
 
     tokens = [id2gloss[i] for i in range(len(id2gloss))]
-    with tempfile.NamedTemporaryFile(mode='w', delete=False, suffix='.txt') as f:
-        f.write('\n'.join(tokens) + '\n')
+    with tempfile.NamedTemporaryFile(mode="w", delete=False, suffix=".txt") as f:
+        f.write("\n".join(tokens) + "\n")
         token_file = f.name
 
     beam_size = config["training"].get("beam_size", 50)
 
-    lm_weight = args.lm_weight if args.lm_weight is not None else config["training"].get(
-        "lm_weight", 1.5)
-    word_score = args.word_score if args.word_score is not None else config["training"].get(
-        "word_score", 1.5)
+    lm_weight = (
+        args.lm_weight if args.lm_weight is not None else config["training"].get("lm_weight", 1.5)
+    )
+    word_score = (
+        args.word_score
+        if args.word_score is not None
+        else config["training"].get("word_score", 1.5)
+    )
 
     print(
-        f"Decoder Config -> LM Weight: {lm_weight} | Word Score: {word_score} | Beam: {beam_size}")
+        f"Decoder Config -> LM Weight: {lm_weight} | Word Score: {word_score} | Beam: {beam_size}"
+    )
 
     decoder_obj = ctc_decoder(
         lexicon=lexicon_path,
@@ -74,21 +79,26 @@ def build_lm_decoder(id2gloss, config, args):
 
 def main():
     parser = argparse.ArgumentParser(description="Inference for CoSign Model")
-    parser.add_argument("--greedy", action="store_true",
-                        help="Force greedy decoding instead of beam search")
-    parser.add_argument("--lm_weight", type=float,
-                        default=None, help="Override LM weight")
-    parser.add_argument("--word_score", type=float, default=None,
-                        help="Override Word Score (Insertion bonus)")
+    parser.add_argument(
+        "--greedy", action="store_true", help="Force greedy decoding instead of beam search"
+    )
+    parser.add_argument("--lm_weight", type=float, default=None, help="Override LM weight")
+    parser.add_argument(
+        "--word_score", type=float, default=None, help="Override Word Score (Insertion bonus)"
+    )
     args = parser.parse_args()
 
     config = load_config()
-    device = torch.device(config["system"]["device"] if config["system"]["device"]
-                          != "auto" else "cuda" if torch.cuda.is_available() else "cpu")
+    device = torch.device(
+        config["system"]["device"]
+        if config["system"]["device"] != "auto"
+        else "cuda"
+        if torch.cuda.is_available()
+        else "cpu"
+    )
 
     print("Building vocabulary")
-    gloss2id, id2gloss = build_gloss_vocab(
-        [config["data"]["train_ann"], config["data"]["dev_ann"]])
+    gloss2id, id2gloss = build_gloss_vocab([config["data"]["train_ann"], config["data"]["dev_ann"]])
     num_classes = len(gloss2id)
 
     print("Loading test dataset")
@@ -105,7 +115,7 @@ def main():
         batch_size=config["training"]["batch_size"],
         shuffle=False,
         collate_fn=phoenix_ctc_collate_fn,
-        num_workers=config["data"]["num_workers"]
+        num_workers=config["data"]["num_workers"],
     )
 
     if not args.greedy:
@@ -117,12 +127,10 @@ def main():
     print("Loading Model")
     model = CoSign1SModel(num_classes=num_classes, dropout=0.0)
 
-    ckpt_path = os.path.join(
-        config["system"]["checkpoint_dir"], "best_model.pth")
+    ckpt_path = os.path.join(config["system"]["checkpoint_dir"], "best_model.pth")
     if os.path.exists(ckpt_path):
-        checkpoint = torch.load(
-            ckpt_path, map_location=device, weights_only=False)
-        model.load_state_dict(checkpoint['model_state_dict'])
+        checkpoint = torch.load(ckpt_path, map_location=device, weights_only=False)
+        model.load_state_dict(checkpoint["model_state_dict"])
         print(f"Loaded checkpoint from epoch {checkpoint['epoch']}")
     else:
         raise FileNotFoundError(f"No checkpoint found at {ckpt_path}")
@@ -133,9 +141,9 @@ def main():
     all_hyps = []
     all_refs = []
 
-    print("\n" + "="*50)
+    print("\n" + "=" * 50)
     print("STARTING INFERENCE")
-    print("="*50)
+    print("=" * 50)
 
     with torch.no_grad():
         for batch_idx, batch in enumerate(test_loader):
@@ -150,8 +158,7 @@ def main():
             seq_lengths = outputs["phi"]["logit_lengths"].cpu()
 
             if args.greedy:
-                batch_hyps = greedy_decode(
-                    logits, seq_lengths, id2gloss, blank=0)
+                batch_hyps = greedy_decode(logits, seq_lengths, id2gloss, blank=0)
             else:
                 log_probs = F.log_softmax(logits, dim=-1).cpu()
                 decode_results = decoder_obj(log_probs, seq_lengths)
@@ -159,14 +166,12 @@ def main():
                 batch_hyps = []
                 for i in range(targets.size(0)):
                     best_hyp_ids = decode_results[i][0].tokens.tolist()
-                    hyp_words = [id2gloss.get(v, "<unk>")
-                                 for v in best_hyp_ids if v != 0]
+                    hyp_words = [id2gloss.get(v, "<unk>") for v in best_hyp_ids if v != 0]
                     batch_hyps.append(" ".join(hyp_words))
 
             for i in range(targets.size(0)):
-                ref_ids = targets[i][:target_lengths[i]]
-                ref_words = [id2gloss.get(v.item(), "<unk>")
-                             for v in ref_ids if v.item() != 0]
+                ref_ids = targets[i][: target_lengths[i]]
+                ref_words = [id2gloss.get(v.item(), "<unk>") for v in ref_ids if v.item() != 0]
                 ref_str = " ".join(ref_words)
                 hyp_str = batch_hyps[i]
 
@@ -178,9 +183,9 @@ def main():
                 print(f"HYP : {hyp_str}")
                 print("-" * 50)
 
-    print("\n" + "="*50)
+    print("\n" + "=" * 50)
     print("FINAL EVALUATION STATISTICS")
-    print("="*50)
+    print("=" * 50)
 
     out = jiwer.process_words(all_refs, all_hyps)
 
@@ -191,14 +196,13 @@ def main():
     print("\n--- Error Breakdown ---")
     total_words = sum(len(r.split()) for r in all_refs)
     print(f"Total Reference Words : {total_words}")
-    print(f"Substitutions         : {out.substitutions} ({
-          (out.substitutions/total_words)*100:.2f}%)")
-    print(f"Deletions             : {out.deletions} ({
-          (out.deletions/total_words)*100:.2f}%)")
-    print(f"Insertions            : {out.insertions} ({
-          (out.insertions/total_words)*100:.2f}%)")
-    print(f"Hits (Correct)        : {
-          out.hits} ({(out.hits/total_words)*100:.2f}%)")
+    print(
+        f"Substitutions         : {out.substitutions} ({
+            (out.substitutions / total_words) * 100:.2f}%)"
+    )
+    print(f"Deletions             : {out.deletions} ({(out.deletions / total_words) * 100:.2f}%)")
+    print(f"Insertions            : {out.insertions} ({(out.insertions / total_words) * 100:.2f}%)")
+    print(f"Hits (Correct)        : {out.hits} ({(out.hits / total_words) * 100:.2f}%)")
 
 
 if __name__ == "__main__":

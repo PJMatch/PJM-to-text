@@ -70,7 +70,7 @@ def random_temporal_scaling(frames, scale_range=(0.8, 1.2), min_frames=4):
 
     x = frames.reshape(T, V * C).transpose(0, 1).unsqueeze(0)  # [1, V*C, T]
     x = F.interpolate(x, size=new_T, mode="linear", align_corners=False)
-    x = x.squeeze(0).transpose(0, 1).reshape(new_T, V, C)      # [new_T, V, C]
+    x = x.squeeze(0).transpose(0, 1).reshape(new_T, V, C)  # [new_T, V, C]
 
     return x
 
@@ -101,8 +101,7 @@ class PhoenixDataset(Dataset):
                 continue
 
             gloss_tokens = self.annotations[seq_id]["gloss_tokens"]
-            gloss_ids = [self.gloss2id[g]
-                         for g in gloss_tokens if g in self.gloss2id]
+            gloss_ids = [self.gloss2id[g] for g in gloss_tokens if g in self.gloss2id]
 
             if len(gloss_ids) == 0:
                 continue
@@ -132,9 +131,9 @@ class PhoenixDataset(Dataset):
 
         return {
             "seq_id": seq_id,
-            "frames": sequence,                 # [T, 553, 3]
-            "target": target,                  # [S]
-            "frame_len": sequence.shape[0],    # after temporal scaling
+            "frames": sequence,  # [T, 553, 3]
+            "target": target,  # [S]
+            "frame_len": sequence.shape[0],  # after temporal scaling
         }
 
 
@@ -143,15 +142,11 @@ def phoenix_ctc_collate_fn(batch):
     targets = [item["target"] for item in batch]
     seq_ids = [item["seq_id"] for item in batch]
 
-    frame_lengths = torch.tensor([x.shape[0]
-                                 for x in frames], dtype=torch.long)
-    target_lengths = torch.tensor([y.shape[0]
-                                  for y in targets], dtype=torch.long)
+    frame_lengths = torch.tensor([x.shape[0] for x in frames], dtype=torch.long)
+    target_lengths = torch.tensor([y.shape[0] for y in targets], dtype=torch.long)
 
-    padded_frames = pad_sequence(
-        frames, batch_first=True, padding_value=0.0)   # [B, T, V, C]
-    padded_targets = pad_sequence(
-        targets, batch_first=True, padding_value=0)    # [B, S]
+    padded_frames = pad_sequence(frames, batch_first=True, padding_value=0.0)  # [B, T, V, C]
+    padded_targets = pad_sequence(targets, batch_first=True, padding_value=0)  # [B, S]
 
     return {
         "seq_ids": seq_ids,

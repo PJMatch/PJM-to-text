@@ -11,29 +11,23 @@ from torch.utils.data import DataLoader, Dataset
 
 class CTCSentenceVocabulary:
     def __init__(self, json_path: str) -> None:
-        self.word2id: Dict[str, int] = {
-            '<blank>': 0,
-            '<UNK>': 1
-        }
-        self.id2word: Dict[int, str] = {
-            0: '<blank>',
-            1: '<UNK>'
-        }
+        self.word2id: Dict[str, int] = {"<blank>": 0, "<UNK>": 1}
+        self.id2word: Dict[int, str] = {0: "<blank>", 1: "<UNK>"}
         self._build_vocab(json_path)
 
     def tokenize(self, text: str) -> List[str]:
         text = text.upper()
-        text = re.sub(r'[^A-ZÀ-Ÿ0-9\s\']', '', text)
+        text = re.sub(r"[^A-ZÀ-Ÿ0-9\s\']", "", text)
         return text.split()
 
     def _build_vocab(self, json_path: str) -> None:
-        with open(json_path, 'r', encoding='utf-8') as file_handler:
+        with open(json_path, "r", encoding="utf-8") as file_handler:
             all_annotations = json.load(file_handler)
 
         unique_words = set()
         for annotations in all_annotations.values():
             for annotation in annotations:
-                words = self.tokenize(annotation['value'])
+                words = self.tokenize(annotation["value"])
                 unique_words.update(words)
 
         for word in sorted(unique_words):
@@ -57,7 +51,7 @@ class SignLanguageCTCDataset(Dataset):
         json_path: str,
         vocab: CTCSentenceVocabulary,
         fps: int = 30,
-        filter_mode: str = 'lips_brows'
+        filter_mode: str = "lips_brows",
     ) -> None:
         self.data = np.load(npy_path)
         self.fps = fps
@@ -65,7 +59,7 @@ class SignLanguageCTCDataset(Dataset):
 
         video_id = os.path.splitext(os.path.basename(npy_path))[0]
 
-        with open(json_path, 'r', encoding='utf-8') as file_handler:
+        with open(json_path, "r", encoding="utf-8") as file_handler:
             all_annotations = json.load(file_handler)
             if video_id not in all_annotations:
                 raise ValueError(f"Missing key: {video_id}")
@@ -73,20 +67,88 @@ class SignLanguageCTCDataset(Dataset):
 
         base_points = list(range(75))
 
-        if filter_mode == 'jaw':
+        if filter_mode == "jaw":
             jaw_idx = [
-                10, 21, 54, 58, 67, 93, 103, 109, 127, 132, 136, 148,
-                149, 150, 152, 162, 172, 176, 234, 251, 284, 288, 297,
-                323, 332, 338, 356, 361, 365, 377, 378, 379, 389, 397,
-                400, 454
+                10,
+                21,
+                54,
+                58,
+                67,
+                93,
+                103,
+                109,
+                127,
+                132,
+                136,
+                148,
+                149,
+                150,
+                152,
+                162,
+                172,
+                176,
+                234,
+                251,
+                284,
+                288,
+                297,
+                323,
+                332,
+                338,
+                356,
+                361,
+                365,
+                377,
+                378,
+                379,
+                389,
+                397,
+                400,
+                454,
             ]
             face_points = [idx + 75 for idx in jaw_idx]
-        elif filter_mode == 'lips_brows':
+        elif filter_mode == "lips_brows":
             lips_brows_idx = [
-                61, 146, 91, 181, 84, 17, 314, 405, 321, 375, 291, 185,
-                40, 39, 37, 0, 267, 269, 270, 409, 70, 63, 105, 66, 107,
-                55, 65, 52, 53, 46, 300, 293, 334, 296, 336, 285, 295,
-                282, 283, 276
+                61,
+                146,
+                91,
+                181,
+                84,
+                17,
+                314,
+                405,
+                321,
+                375,
+                291,
+                185,
+                40,
+                39,
+                37,
+                0,
+                267,
+                269,
+                270,
+                409,
+                70,
+                63,
+                105,
+                66,
+                107,
+                55,
+                65,
+                52,
+                53,
+                46,
+                300,
+                293,
+                334,
+                296,
+                336,
+                285,
+                295,
+                282,
+                283,
+                276,
             ]
             face_points = [idx + 75 for idx in lips_brows_idx]
         else:
@@ -103,21 +165,21 @@ class SignLanguageCTCDataset(Dataset):
     def __getitem__(self, idx: int) -> Tuple[torch.Tensor, torch.Tensor]:
         annotation = self.annotations[idx]
 
-        start_frame = int((annotation['start'] / 1000.0) * self.fps)
-        end_frame = int((annotation['end'] / 1000.0) * self.fps)
+        start_frame = int((annotation["start"] / 1000.0) * self.fps)
+        end_frame = int((annotation["end"] / 1000.0) * self.fps)
         end_frame = min(end_frame, len(self.data))
 
         filtered_sequence = self.data[start_frame:end_frame, self.flat_indices]
-        encoded_text = self.vocab.encode(annotation['value'])
+        encoded_text = self.vocab.encode(annotation["value"])
 
         return (
             torch.tensor(filtered_sequence, dtype=torch.float32),
-            torch.tensor(encoded_text, dtype=torch.long)
+            torch.tensor(encoded_text, dtype=torch.long),
         )
 
 
 def pad_collate_fn(
-    batch: List[Tuple[torch.Tensor, torch.Tensor]]
+    batch: List[Tuple[torch.Tensor, torch.Tensor]],
 ) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor]:
     video_seqs = [item[0] for item in batch]
     text_seqs = [item[1] for item in batch]
