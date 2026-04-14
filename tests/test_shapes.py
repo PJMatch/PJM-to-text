@@ -12,7 +12,7 @@ def test_stgcn_forward_shape():
 
     B = 4
     C = 3
-    T = 240
+    T = 60
     V = 0
     for _, vertecies in curr_config.items():
         V += len(vertecies)
