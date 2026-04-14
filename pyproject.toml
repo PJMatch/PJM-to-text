@@ -24,6 +24,7 @@ dependencies = [
     "tensorboard-data-server>=0.7.2",
     "torchaudio>=2.10.0",
     "werkzeug>=3.1.6",
+    "pytest>=9.0.2",
 ]
 
 [dependency-groups]
@@ -66,3 +67,6 @@ module = [
     "matplotlib.*"
 ]
 ignore_missing_imports = true
+
+[tool.pytest.ini_options]
+pythonpath = ["src"]
