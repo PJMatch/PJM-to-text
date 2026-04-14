@@ -1,3 +1,5 @@
+"""UNIT TESTS."""
+
 import torch
 
 from stgcn.stgcn import STGCNCoSign1s

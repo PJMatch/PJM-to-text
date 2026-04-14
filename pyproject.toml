@@ -41,6 +41,7 @@ line-length = 100
 
 extend-exclude = [
     "models/stgcn",
+    "src/stgcn/stgcn_src",
 ]
 
 [tool.ruff.lint]
