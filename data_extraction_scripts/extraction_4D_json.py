@@ -1,9 +1,11 @@
+"""Script for extracting keypoints and saving them as padded JSON files."""
+import json
+from pathlib import Path
+
+import cv2
 import mediapipe as mp
 from mediapipe.tasks import python
 from mediapipe.tasks.python import vision
-import cv2
-import json
-from pathlib import Path
 from tqdm import tqdm
 
 # Paths
@@ -13,8 +15,8 @@ FACE_MODEL_PATH = "face_landmarker_v2_with_blendshapes.task"
 
 
 def extract_and_pad_keypoints(pose_result, hand_result, face_result):
-    """
-    Extracts visible landmarks and applies zero-padding directly in one go.
+    """Extracts visible landmarks and applies zero-padding directly in one go.
+
     Returns a flat list of exactly 2212 floats per frame.
     Missing components are padded with 0.0 (including the confidence score).
     """
@@ -61,10 +63,7 @@ def extract_and_pad_keypoints(pose_result, hand_result, face_result):
 
 
 def main():
-    """
-    Main loop for extraction and padding.
-    Saves sequences directly as padded .json files.
-    """
+    """Main loop for extraction and padding. Saves sequences directly as padded .json files."""
     pose_detector = vision.PoseLandmarker.create_from_options(
         vision.PoseLandmarkerOptions(
             base_options=python.BaseOptions(model_asset_path="pose_landmarker_lite.task"),

@@ -30,7 +30,6 @@ from mediapipe.tasks import python
 from mediapipe.tasks.python import vision
 from mediapipe.tasks.python.vision import drawing_styles, drawing_utils
 
-
 TASKS_DIR = Path("../mediapipe_tasks")
 
 

@@ -53,6 +53,9 @@ ignore = ["D203", "D212"]
 [tool.ruff.lint.pydocstyle]
 convention = "google" 
 
+[tool.ruff.lint.extend-per-file-ignores]
+"mediapipe_test/mediapipe_detection.py" = ["F821", "F841"]
+
 [tool.mypy]
 strict = false
 warn_return_any = true

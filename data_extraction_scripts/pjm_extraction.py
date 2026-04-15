@@ -1,7 +1,7 @@
 """Module for extraction from PJM dataset."""
 
-import time
 import json
+import time
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 
@@ -43,7 +43,7 @@ def extract_frames(path: str):
 
 
 def is_recorded_correctly(file_path: Path):
-    """Returns True if the file has been maked as recorded correctly"""
+    """Returns True if the file has been maked as recorded correctly."""
     path_str = str(file_path)
     no_extention = path_str[: path_str.find(".")]
     json_path = str(no_extention) + ".json"

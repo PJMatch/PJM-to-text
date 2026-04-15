@@ -1,9 +1,11 @@
+"""Script for raw 4D keypoint extraction from video data."""
+from pathlib import Path
+
+import cv2
 import mediapipe as mp
+import numpy as np
 from mediapipe.tasks import python
 from mediapipe.tasks.python import vision
-import numpy as np
-import cv2
-from pathlib import Path
 from tqdm import tqdm
 
 # Paths
@@ -15,6 +17,7 @@ FACE_MODEL_PATH = "face_landmarker_v2_with_blendshapes.task"
 def extract_raw_keypoints(pose_result, hand_result, face_result):
     """
     Extracts visible landmarks into a structured dictionary without zero-padding.
+    
     Confidence score is extracted from pose visibility.
     Face and hands default to 1.0 if detected.
     Missing components remain as empty lists.
@@ -54,6 +57,7 @@ def extract_raw_keypoints(pose_result, hand_result, face_result):
 def main():
     """
     Main loop for RAW extraction.
+    
     Saves sequences as arrays of dictionaries.
     """
     pose_detector = vision.PoseLandmarker.create_from_options(

@@ -1,7 +1,9 @@
 """
-OpenPose to CoSign (ST-GCN) Pipeline
+OpenPose to CoSign (ST-GCN) Pipeline.
+
 - Open Pose: https://github.com/cmu-perceptual-computing-lab/openpose/releases
-(if model fails to download, use the following links and place them in the models/ directory of OpenPose)
+(if model fails to download, use the following links and place them in the 
+models/ directory of OpenPose)
 - Face: https://www.dropbox.com/s/d08srojpvwnk252/pose_iter_116000.caffemodel?dl=1
 - Hand: https://www.dropbox.com/s/gqgsme6sgoo0zxf/pose_iter_102000.caffemodel?dl=1
 """
@@ -14,12 +16,14 @@ import shutil
 import subprocess
 import sys
 from typing import List
+
 import numpy as np
 
 
 def run_openpose_on_images(
     openpose_bin: str, openpose_root: str, image_dir: str, temp_json_dir: str
 ) -> None:
+    """Runs the OpenPose executable on a directory of images to extract keypoints."""
     os.makedirs(temp_json_dir, exist_ok=True)
 
     if not os.path.exists(openpose_bin):
@@ -48,6 +52,7 @@ def run_openpose_on_images(
 
 
 def convert_jsons_to_cosign_tensor(json_dir: str, output_npy_path: str) -> None:
+    """Converts OpenPose JSON output files into a formatted CoSign tensor."""
     json_files = sorted(glob.glob(os.path.join(json_dir, "*.json")))
     if not json_files:
         return
@@ -87,6 +92,7 @@ def convert_jsons_to_cosign_tensor(json_dir: str, output_npy_path: str) -> None:
 
 
 def process_dataset_folders(openpose_bin: str, openpose_root: str, base_folders: List[str]) -> None:
+    """Processes dataset folders through the OpenPose and CoSign conversion pipeline."""
     temp_workspace = os.path.join(os.getcwd(), "temp_openpose_jsons")
 
     for base_folder in base_folders:
@@ -139,5 +145,7 @@ if __name__ == "__main__":
     print("Start")
     process_dataset_folders(args.openpose_bin, args.openpose_root, target_folders)
     print("Success")
-    # I used: src/Extraction_OpenPose_clear.py --openpose_root "C:\openpose" --openpose_bin "C:\openpose\bin\OpenPoseDemo.exe" --dataset_dir "C:\PJM_projekt\PJM-to-text\src"
+    # I used: src/Extraction_OpenPose_clear.py 
+    # --openpose_root "C:\openpose" --openpose_bin "C:\openpose\bin\OpenPoseDemo.exe"
+    # --dataset_dir "C:\PJM_projekt\PJM-to-text\src"
     # U need to adjust the paths according to your setup.
