@@ -2,6 +2,12 @@
 
 This repo is an attempt to create a deep learning model that does CSLR (Continous Sign Language recognition) on PJM (Polish Sign Language).
 
+## Model Architecture
+
+The diagram below illustrates the complete data flow and architecture of our modified CoSign model used for processing the skeleton graphs.
+
+![PJMatch Graph Architecture](docs/PJMatch_graph.svg)
+
 ## Citation
 ```
 @inproceedings{10.5555/3304222.3304273,
