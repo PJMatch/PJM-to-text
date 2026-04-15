@@ -2,7 +2,7 @@
 OpenPose to CoSign (ST-GCN) Pipeline.
 
 - Open Pose: https://github.com/cmu-perceptual-computing-lab/openpose/releases
-(if model fails to download, use the following links and place them in the 
+(if model fails to download, use the following links and place them in the
 models/ directory of OpenPose)
 - Face: https://www.dropbox.com/s/d08srojpvwnk252/pose_iter_116000.caffemodel?dl=1
 - Hand: https://www.dropbox.com/s/gqgsme6sgoo0zxf/pose_iter_102000.caffemodel?dl=1
@@ -145,7 +145,7 @@ if __name__ == "__main__":
     print("Start")
     process_dataset_folders(args.openpose_bin, args.openpose_root, target_folders)
     print("Success")
-    # I used: src/Extraction_OpenPose_clear.py 
+    # I used: src/Extraction_OpenPose_clear.py
     # --openpose_root "C:\openpose" --openpose_bin "C:\openpose\bin\OpenPoseDemo.exe"
     # --dataset_dir "C:\PJM_projekt\PJM-to-text\src"
     # U need to adjust the paths according to your setup.

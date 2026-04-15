@@ -1,4 +1,5 @@
 """Script for extracting keypoints and saving them as padded JSON files."""
+
 import json
 from pathlib import Path
 

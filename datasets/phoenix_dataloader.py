@@ -1,4 +1,5 @@
 """Dataloader module for the Phoenix sign language dataset."""
+
 from pathlib import Path
 
 import numpy as np
@@ -11,6 +12,7 @@ from torch.utils.data import Dataset
 
 class PhoenixDataset(Dataset):
     """Dataset loader for sign language keypoint sequences."""
+
     def __init__(self, data_dir: str):
         """Initializes the PhoenixDataset."""
         self.data_dir = Path(data_dir)
