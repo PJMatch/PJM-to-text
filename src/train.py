@@ -41,6 +41,7 @@ LEARNING_RATE = float(config["training"]["learning_rate"])
 WEIGHT_DECAY = float(config["training"]["weight_decay"])
 GRAD_CLIP = float(config["training"]["grad_clip"])
 KL_WEIGHT = float(config["training"]["kl_weight"])
+MIRROR_DATA = config["training"]["mirror_data"]
 
 if config["system"]["device"] == "auto":
     DEVICE = torch.device("cuda" if torch.cuda.is_available() else "cpu")
@@ -111,7 +112,7 @@ def train_step(model, optimizer, frames, frame_lengths, targets, target_lengths,
 
     outputs = model(frames_permuted, frame_lengths, keep_prob=dynamic_keep_prob)
 
-    loss = compute_cosign_loss(
+    loss_dict = compute_cosign_loss(
         outputs,
         targets,
         target_lengths,
@@ -120,6 +121,7 @@ def train_step(model, optimizer, frames, frame_lengths, targets, target_lengths,
         keep_prob=dynamic_keep_prob,
     )
 
+    loss = loss_dict["total"]
     loss.backward()
     torch.nn.utils.clip_grad_norm_(model.parameters(), grad_clip)
     optimizer.step()
@@ -302,18 +304,24 @@ def main():
             total_train_loss += loss_orig
             num_batches += 1
 
-            frames_mirrored = mirror_batch(frames, frame_lengths)
-            loss_mirrored, keep_prob_mirrored = train_step(
-                model, optimizer, frames_mirrored, frame_lengths, targets, target_lengths,
-                criterion, KL_WEIGHT, GRAD_CLIP, DEVICE
-            )
-            total_train_loss += loss_mirrored
-            num_batches += 1
+            if MIRROR_DATA:
+                frames_mirrored = mirror_batch(frames, frame_lengths)
+                loss_mirrored, keep_prob_mirrored = train_step(
+                    model, optimizer, frames_mirrored, frame_lengths, targets, target_lengths,
+                    criterion, KL_WEIGHT, GRAD_CLIP, DEVICE
+                )
+                total_train_loss += loss_mirrored
+                num_batches += 1
 
             if batch_idx % 100 == 0:
-                print(
-                    f"  Batch {batch_idx + 1}/{len(train_loader)} | Orig: {loss_orig:.4f} | Mirr: {loss_mirrored:.4f} | keep_prob: {keep_prob_orig:.2f}/{keep_prob_mirrored:.2f}"
-                )
+                if MIRROR_DATA:
+                    print(
+                        f"  Batch {batch_idx + 1}/{len(train_loader)} | Orig: {loss_orig:.4f} | Mirr: {loss_mirrored:.4f} | keep_prob: {keep_prob_orig:.2f}/{keep_prob_mirrored:.2f}"
+                    )
+                else:
+                    print(
+                        f"  Batch {batch_idx + 1}/{len(train_loader)} | Loss: {loss_orig:.4f} | keep_prob: {keep_prob_orig:.2f}"
+                    )
 
         avg_train_loss = total_train_loss / num_batches
         val_loss, avg_wer = evaluate(model, dev_loader, criterion, id2gloss, DEVICE)
