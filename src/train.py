@@ -21,6 +21,12 @@ from model import CoSign1SModel
 from phoenix_dataloader import PhoenixDataset, build_gloss_vocab, phoenix_ctc_collate_fn
 
 
+def mirror_batch(frames, frame_lengths):
+    mirrored = frames.clone()
+    mirrored[:, :, :, 0] *= -1
+    return mirrored
+
+
 def load_config(config_path="config.yaml"):
     with open(config_path, "r") as f:
         config = yaml.safe_load(f)
@@ -88,6 +94,37 @@ def compute_wer(hypotheses, references):
     hyp_strs = [" ".join(h) if len(h) > 0 else "<empty>" for h in hypotheses]
     ref_strs = [" ".join(r) if len(r) > 0 else "<empty>" for r in references]
     return jiwer.wer(ref_strs, hyp_strs)
+
+
+def train_step(model, optimizer, frames, frame_lengths, targets, target_lengths,
+                criterion, kl_weight=KL_WEIGHT, grad_clip=GRAD_CLIP, device=DEVICE):
+    """
+    Single training step on a batch.
+    """
+    optimizer.zero_grad()
+
+    frames_permuted = frames.permute(0, 3, 1, 2)  # [B, C, T, V]
+
+    beta_dist = torch.distributions.beta.Beta(2.0, 2.0)
+    dynamic_keep_prob = beta_dist.sample().item()
+    dynamic_keep_prob = max(0.1, min(0.9, dynamic_keep_prob))
+
+    outputs = model(frames_permuted, frame_lengths, keep_prob=dynamic_keep_prob)
+
+    loss = compute_cosign_loss(
+        outputs,
+        targets,
+        target_lengths,
+        criterion,
+        kl_weight=kl_weight,
+        keep_prob=dynamic_keep_prob,
+    )
+
+    loss.backward()
+    torch.nn.utils.clip_grad_norm_(model.parameters(), grad_clip)
+    optimizer.step()
+
+    return loss.item(), dynamic_keep_prob
 
 
 def compute_cosign_loss(
@@ -253,57 +290,30 @@ def main():
         print(f"Epoch {epoch + 1:3d} | Learning rate: {current_lr:.2e}")
 
         for batch_idx, batch in enumerate(train_loader):
-            global_step = epoch * total_train_batches + batch_idx
-            optimizer.zero_grad()
-
-            frames = batch["frames"].to(DEVICE).permute(0, 3, 1, 2)
+            frames = batch["frames"].to(DEVICE)  # [B, T, V, C]
             frame_lengths = batch["frame_lengths"].to(DEVICE)
             targets = batch["targets"].to(DEVICE)
             target_lengths = batch["target_lengths"].to(DEVICE)
 
-            beta_dist = torch.distributions.beta.Beta(2.0, 2.0)
-            dynamic_keep_prob = beta_dist.sample().item()
-            dynamic_keep_prob = max(0.1, min(0.9, dynamic_keep_prob))
-
-            outputs = model(frames, frame_lengths, keep_prob=dynamic_keep_prob)
-
-            loss_dict = compute_cosign_loss(
-                outputs,
-                targets,
-                target_lengths,
-                criterion,
-                kl_weight=KL_WEIGHT,
-                keep_prob=dynamic_keep_prob,
+            loss_orig, keep_prob_orig = train_step(
+                model, optimizer, frames, frame_lengths, targets, target_lengths,
+                criterion, KL_WEIGHT, GRAD_CLIP, DEVICE
             )
-            loss = loss_dict["total"]
-            ctc_loss = loss_dict["ctc"]
-            kl_loss = loss_dict["kl"]
+            total_train_loss += loss_orig
+            num_batches += 1
 
-            loss.backward()
-            grad_norm = torch.nn.utils.clip_grad_norm_(model.parameters(), GRAD_CLIP)
-            optimizer.step()
-
-            if batch_idx % LOG_INTERVAL == 0:
-                metrics = {
-                    "train/loss": loss.item(),
-                    "train/ctc": ctc_loss.item(),
-                    "train/kl": kl_loss.item(),
-                    "train/grad_norm": grad_norm.item(),
-                    "train/keep_prob": dynamic_keep_prob,
-                    "train/lr": current_lr,
-                    "train/scale": model.gloss_head.scale.item(),
-                }
-                if tb_writer:
-                    for k, v in metrics.items():
-                        tb_writer.add_scalar(k, v, global_step)
-                if LOG_WANDB:
-                    wandb.log(metrics, step=global_step)
-
-            total_train_loss += loss.item()
+            frames_mirrored = mirror_batch(frames, frame_lengths)
+            loss_mirrored, keep_prob_mirrored = train_step(
+                model, optimizer, frames_mirrored, frame_lengths, targets, target_lengths,
+                criterion, KL_WEIGHT, GRAD_CLIP, DEVICE
+            )
+            total_train_loss += loss_mirrored
             num_batches += 1
 
             if batch_idx % 100 == 0:
-                print(f"  Batch {batch_idx + 1}/{len(train_loader)} | Loss: {loss.item():.4f}")
+                print(
+                    f"  Batch {batch_idx + 1}/{len(train_loader)} | Orig: {loss_orig:.4f} | Mirr: {loss_mirrored:.4f} | keep_prob: {keep_prob_orig:.2f}/{keep_prob_mirrored:.2f}"
+                )
 
         avg_train_loss = total_train_loss / num_batches
         val_loss, avg_wer = evaluate(model, dev_loader, criterion, id2gloss, DEVICE)
