@@ -18,7 +18,8 @@ except ImportError:
     WANDB_AVAILABLE = False
 
 from model import CoSign1SModel
-from phoenix_dataloader import PhoenixDataset, build_gloss_vocab, phoenix_ctc_collate_fn
+from phoenix_dataloader import PhoenixDataset, build_gloss_vocab as build_phoenix_vocab, phoenix_ctc_collate_fn
+from pjm_dataloader import PJMDataset, build_gloss_vocab as build_pjm_vocab, pjm_ctc_collate_fn
 
 
 def mirror_batch(frames, frame_lengths):
@@ -236,18 +237,31 @@ def main():
         wandb.init(project="cosign-sign-language", name=run_id, config=config, dir=LOG_DIR)
 
     print("Building vocabulary")
-    gloss2id, id2gloss = build_gloss_vocab([ANN_TRAIN, ANN_DEV])
-    num_classes = len(gloss2id)
+    dataset_type = config.get("data", {}).get("dataset", "phoenix")
 
-    print("Loading full datasets")
-    train_dataset = PhoenixDataset(DATA_DIR_TRAIN, ANN_TRAIN, gloss2id)
-    dev_dataset = PhoenixDataset(DATA_DIR_DEV, ANN_DEV, gloss2id)
+    if dataset_type == "pjm":
+        annotation_dir = config["data"]["annotation_dir"]
+        gloss2id, id2gloss = build_pjm_vocab(annotation_dir, [ANN_TRAIN, ANN_DEV])
+        num_classes = len(gloss2id)
+
+        print("Loading PJM datasets")
+        train_dataset = PJMDataset(DATA_DIR_TRAIN, annotation_dir, ANN_TRAIN, gloss2id)
+        dev_dataset = PJMDataset(DATA_DIR_DEV, annotation_dir, ANN_DEV, gloss2id, split="test")
+        collate_fn = pjm_ctc_collate_fn
+    else:
+        gloss2id, id2gloss = build_phoenix_vocab([ANN_TRAIN, ANN_DEV])
+        num_classes = len(gloss2id)
+
+        print("Loading Phoenix datasets")
+        train_dataset = PhoenixDataset(DATA_DIR_TRAIN, ANN_TRAIN, gloss2id)
+        dev_dataset = PhoenixDataset(DATA_DIR_DEV, ANN_DEV, gloss2id)
+        collate_fn = phoenix_ctc_collate_fn
 
     train_loader = DataLoader(
         train_dataset,
         batch_size=BATCH_SIZE,
         shuffle=True,
-        collate_fn=phoenix_ctc_collate_fn,
+        collate_fn=collate_fn,
         num_workers=NUM_WORKERS,
         pin_memory=PIN_MEMORY,
     )
@@ -255,7 +269,7 @@ def main():
         dev_dataset,
         batch_size=BATCH_SIZE,
         shuffle=False,
-        collate_fn=phoenix_ctc_collate_fn,
+        collate_fn=collate_fn,
         num_workers=NUM_WORKERS,
         pin_memory=PIN_MEMORY,
     )
