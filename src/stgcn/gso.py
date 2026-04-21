@@ -1,6 +1,7 @@
 """Module for generating Graph Signl Operator."""
 
 import json
+from pathlib import Path
 
 import numpy as np
 import torch
@@ -10,7 +11,7 @@ from mediapipe.tasks.python import vision
 class GSOGenerator:
     """Class for dynamic GSO generation."""
 
-    def __init__(self, config_path):
+    def __init__(self, config_path=None):
         """Constructor of GSOGenerator class.
 
         Args:
@@ -25,10 +26,14 @@ class GSOGenerator:
             }
         where the lists are lists of points that you want to inclue in traininig
         """
+        if config_path is None:
+            current_dir = Path(__file__).resolve().parent
+            config_path = current_dir / "config.json"
         with open(config_path, "r") as config_file:
             self.config = json.load(config_file)
 
-        if self.config["estimator"].lower() == "mediapie":
+        print(self.config["estimator"].lower())
+        if self.config["estimator"].lower() == "mediapipe":
             self.master_edges = {
                 "face": [
                     (conn.start, conn.end)
@@ -131,4 +136,4 @@ class GSOGenerator:
 if __name__ == "__main__":
     pose = ([(conn.start, conn.end) for conn in vision.PoseLandmarksConnections.POSE_LANDMARKS],)
     print(pose)
-    dwd = GSOGenerator("./example_config.json")
+    dwd = GSOGenerator()
