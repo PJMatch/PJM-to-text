@@ -175,6 +175,10 @@ class STGCNCoSign1s(nn.Module):
                 root_offset = root_point.clone()
                 root_offset[:, 2, :, :] = 0.0
                 centralized_groups[name] = group_data - root_offset
+            else:
+                print("\n Specified vertex convention unrecognised -> defaulting to (x,y,z) \n")
+                self.config["convention"] = "xyz"
+                centralized_groups[name] = group_data - root_point
 
         features = []
 
