@@ -145,12 +145,12 @@ class STGCNCoSign1s(nn.Module):
         """Forward function of CoSign1s ST-GCN module.
 
         Args:
-            x :[Batch, Channels, Timesteps, Vertices] -> [B, 3, T, 553 (or less)]
+            x :[Batch, Channels, Timesteps, Vertices] -> [B, 2, 1024, T]
                 x is original, all-point vector from the .npy files
             keep_prob: probability of keeping the feature during masking.
 
         Returns:
-            v_fused : # frame-wise feature for LSTM
+            v_fused : frame-wise feature for LSTM
         """
         if not self.training:
             keep_prob = 1.0
@@ -196,9 +196,6 @@ class STGCNCoSign1s(nn.Module):
             # result [B, 64, T]
             feat = feat.mean(dim=-1)
             features.append(feat)
-
-        # print(f"DEBUG: Shape of one feature: {features[0].shape}")
-        v = torch.cat(features, dim=1)  # [B, 320, T]
 
         v_groups = torch.stack(features, dim=1)
 
