@@ -52,8 +52,10 @@ else:
 CHECKPOINT_DIR = config["system"]["checkpoint_dir"]
 DATA_DIR_TRAIN = config["data"]["train_dir"]
 DATA_DIR_DEV = config["data"]["dev_dir"]
+DATA_DIR_TEST = config["data"]["test_dir"]
 ANN_TRAIN = config["data"]["train_ann"]
 ANN_DEV = config["data"]["dev_ann"]
+ANN_TEST = config["data"]["test_ann"]
 NUM_WORKERS = config["data"]["num_workers"]
 PIN_MEMORY = config["data"]["pin_memory"]
 
@@ -108,8 +110,10 @@ def train_step(model, optimizer, frames, frame_lengths, targets, target_lengths,
     frames_permuted = frames.permute(0, 3, 1, 2)  # [B, C, T, V]
 
     beta_dist = torch.distributions.beta.Beta(2.0, 2.0)
-    dynamic_keep_prob = beta_dist.sample().item()
-    dynamic_keep_prob = max(0.1, min(0.9, dynamic_keep_prob))
+    # dynamic_keep_prob = beta_dist.sample().item()
+    # dynamic_keep_prob = max(0.1, min(0.9, dynamic_keep_prob))
+    dynamic_keep_prob = 0.8
+
 
     outputs = model(frames_permuted, frame_lengths, keep_prob=dynamic_keep_prob)
 
@@ -240,22 +244,22 @@ def main():
     dataset_type = config.get("data", {}).get("dataset", "phoenix")
 
     if dataset_type == "pjm":
-        annotation_dir = config["data"]["annotation_dir"]
-        gloss2id, id2gloss = build_pjm_vocab(annotation_dir, [ANN_TRAIN, ANN_DEV])
-        num_classes = len(gloss2id)
+        ann_dir = config["data"]["annotation_dir"]
+        splits = [ANN_TRAIN, ANN_DEV]
+        gloss2id, id2gloss = build_pjm_vocab(ann_dir, splits)
 
-        print("Loading PJM datasets")
-        train_dataset = PJMDataset(DATA_DIR_TRAIN, annotation_dir, ANN_TRAIN, gloss2id)
-        dev_dataset = PJMDataset(DATA_DIR_DEV, annotation_dir, ANN_DEV, gloss2id, split="test")
+        train_dataset = PJMDataset(DATA_DIR_TRAIN, ann_dir, ANN_TRAIN, gloss2id)
+        dev_dataset = PJMDataset(DATA_DIR_DEV, ann_dir, ANN_DEV, gloss2id, split="test")
         collate_fn = pjm_ctc_collate_fn
     else:
-        gloss2id, id2gloss = build_phoenix_vocab([ANN_TRAIN, ANN_DEV])
-        num_classes = len(gloss2id)
+        splits = [ANN_TRAIN, ANN_DEV]
+        gloss2id, id2gloss = build_phoenix_vocab(splits)
 
-        print("Loading Phoenix datasets")
         train_dataset = PhoenixDataset(DATA_DIR_TRAIN, ANN_TRAIN, gloss2id)
         dev_dataset = PhoenixDataset(DATA_DIR_DEV, ANN_DEV, gloss2id)
         collate_fn = phoenix_ctc_collate_fn
+
+    num_classes = len(gloss2id)
 
     train_loader = DataLoader(
         train_dataset,
