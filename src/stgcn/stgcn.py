@@ -167,8 +167,14 @@ class STGCNCoSign1s(nn.Module):
 
             # first point in each group MUST be the root
             root_point = group_data[:, :, :, 0].unsqueeze(-1)
+
             # centralization - eqn. (2)
-            centralized_groups[name] = group_data - root_point
+            if self.config["convention"] == "xyz":
+                centralized_groups[name] = group_data - root_point
+            elif self.config["convention"] == "xyc":
+                root_offset = root_point.clone()
+                root_offset[:, 2, :, :] = 0.0
+                centralized_groups[name] = group_data - root_offset
 
         features = []
 

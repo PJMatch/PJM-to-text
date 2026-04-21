@@ -25,35 +25,38 @@ class GSOGenerator:
             }
         where the lists are lists of points that you want to inclue in traininig
         """
-        self.master_edges = {
-            "face": [
-                (conn.start, conn.end)
-                for conn in vision.FaceLandmarksConnections.FACE_LANDMARKS_TESSELATION
-            ],
-            "mouth": [
-                (conn.start, conn.end)
-                for conn in vision.FaceLandmarksConnections.FACE_LANDMARKS_LIPS
-            ],
-            "hands": [
-                (conn.start, conn.end) for conn in vision.HandLandmarksConnections.HAND_CONNECTIONS
-            ],
-            "body": [
-                (conn.start, conn.end) for conn in vision.PoseLandmarksConnections.POSE_LANDMARKS
-            ],
-        }
-
-        # wrist_to_fingers hold wrist-to-fingers
-        # connections absent in mediapipe but helpful (maybe) for the model
-        wrist_to_fingers = [
-            (0, 5),  # to index
-            (0, 9),  # to middle
-            (0, 13),  # to ring
-            # to pinky already in mediapipe so we dont add it manually
-        ]
-        self.master_edges["hands"].extend(wrist_to_fingers)
-
         with open(config_path, "r") as config_file:
             self.config = json.load(config_file)
+
+        if self.config["estimator"].lower() == "mediapie":
+            self.master_edges = {
+                "face": [
+                    (conn.start, conn.end)
+                    for conn in vision.FaceLandmarksConnections.FACE_LANDMARKS_TESSELATION
+                ],
+                "mouth": [
+                    (conn.start, conn.end)
+                    for conn in vision.FaceLandmarksConnections.FACE_LANDMARKS_LIPS
+                ],
+                "hands": [
+                    (conn.start, conn.end)
+                    for conn in vision.HandLandmarksConnections.HAND_CONNECTIONS
+                ],
+                "body": [
+                    (conn.start, conn.end)
+                    for conn in vision.PoseLandmarksConnections.POSE_LANDMARKS
+                ],
+            }
+
+            # wrist_to_fingers hold wrist-to-fingers
+            # connections absent in mediapipe but helpful (maybe) for the model
+            wrist_to_fingers = [
+                (0, 5),  # to index
+                (0, 9),  # to middle
+                (0, 13),  # to ring
+                # to pinky already in mediapipe so we dont add it manually
+            ]
+            self.master_edges["hands"].extend(wrist_to_fingers)
 
         self.gsos = {}
         self._generate_all_gsos()

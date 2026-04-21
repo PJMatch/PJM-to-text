@@ -16,5 +16,7 @@
     ],
     "body": [
         0, 11, 12, 13, 14, 15, 16, 23, 24
-    ]
+    ],
+    "estimator": "mediapipe",
+    "convention": "xyz"
 }
