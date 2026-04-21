@@ -7,6 +7,8 @@
 venv/
 __pycache__
 ./src/pheonix-dataset
+./src/pjm_dataset
+src/pjm_dataset
 src/pheonix-dataset
 .pytest_cache/
 *.py[cod]
