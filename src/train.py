@@ -1,7 +1,11 @@
+import argparse
+import json
 import os
+import random
 import time
 
 import jiwer
+import numpy as np
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
@@ -18,8 +22,23 @@ except ImportError:
     WANDB_AVAILABLE = False
 
 from model import CoSign1SModel
-from phoenix_dataloader import PhoenixDataset, build_gloss_vocab as build_phoenix_vocab, phoenix_ctc_collate_fn
+from phoenix_dataloader import (
+    PhoenixDataset,
+    build_gloss_vocab as build_phoenix_vocab,
+    phoenix_ctc_collate_fn,
+)
 from pjm_dataloader import PJMDataset, build_gloss_vocab as build_pjm_vocab, pjm_ctc_collate_fn
+
+
+def parse_args():
+    parser = argparse.ArgumentParser(description="Train CoSign sign language recognition model")
+    parser.add_argument(
+        "--reproduce_run",
+        type=str,
+        default=None,
+        help="Path to training_run.json file to reproduce a previous run",
+    )
+    return parser.parse_args()
 
 
 def mirror_batch(frames, frame_lengths):
@@ -34,7 +53,69 @@ def load_config(config_path="config.yaml"):
     return config
 
 
-config = load_config()
+def load_training_run_manifest(manifest_path):
+    """Load a training_run.json manifest file."""
+    with open(manifest_path, "r") as f:
+        run_info = json.load(f)
+    return run_info
+
+
+def set_seed(seed, deterministic=True):
+    random.seed(seed)
+    np.random.seed(seed)
+    torch.manual_seed(seed)
+    torch.cuda.manual_seed_all(seed)
+    if deterministic:
+        torch.backends.cudnn.deterministic = True
+        torch.backends.cudnn.benchmark = False
+    else:
+        torch.backends.cudnn.deterministic = False
+        torch.backends.cudnn.benchmark = True
+
+
+def seed_worker(worker_id):
+    worker_seed = torch.initial_seed() % (2**32)
+    np.random.seed(worker_seed)
+    random.seed(worker_seed)
+
+
+def save_training_run(filepath, config, seed, deterministic, extra_info=None):
+    run_info = {
+        "config": config,
+        "seed": seed,
+        "deterministic": deterministic,
+        "torch_version": torch.__version__,
+        "cuda_available": torch.cuda.is_available(),
+    }
+    if extra_info:
+        run_info.update(extra_info)
+    with open(filepath, "w") as f:
+        json.dump(run_info, f, indent=2)
+
+
+args = parse_args()
+
+if args.reproduce_run is not None:
+    print(f"Loading training run manifest from: {args.reproduce_run}")
+    run_info = load_training_run_manifest(args.reproduce_run)
+    config = run_info["config"]
+    SEED = run_info["seed"]
+    DETERMINISTIC = run_info["deterministic"]
+    original_run_id = run_info.get("run_id", "unknown")
+    REPRODUCING_RUN = True
+    print(f"Reproducing run: {original_run_id}")
+    print(f"Seed: {SEED} | Deterministic: {DETERMINISTIC}")
+    print(f"Torch version: {run_info.get('torch_version', 'unknown')}")
+    if "best_wer" in run_info:
+        print(
+            f"Original best WER: {run_info['best_wer']:.3f} at epoch {run_info.get('best_wer_epoch', 'unknown')}"
+        )
+else:
+    config = load_config()
+    SEED = config["training"].get("seed", 42)
+    DETERMINISTIC = config["training"].get("deterministic", True)
+    REPRODUCING_RUN = False
+    original_run_id = None
 
 EPOCHS = config["training"]["epochs"]
 BATCH_SIZE = config["training"]["batch_size"]
@@ -59,7 +140,6 @@ PIN_MEMORY = config["data"]["pin_memory"]
 
 MODEL_DROPOUT = config["model"]["dropout"]
 
-# Logging configuration
 LOG_TENSORBOARD = config["logging"]["tensorboard"]
 LOG_WANDB = config["logging"]["wandb"] and WANDB_AVAILABLE
 LOG_INTERVAL = config["logging"]["log_interval"]
@@ -71,13 +151,14 @@ OPTIMIZER_MILESTONES = config["optimizer"]["milestones"]
 OPTIMIZER_GAMMA = float(config["optimizer"]["gamma"])
 
 
-def save_checkpoint(model, optimizer, epoch, gloss2id, val_loss, filepath):
+def save_checkpoint(model, optimizer, epoch, gloss2id, val_loss, seed, filepath):
     checkpoint = {
         "epoch": epoch,
         "model_state_dict": model.state_dict(),
         "optimizer_state_dict": optimizer.state_dict(),
         "gloss2id": gloss2id,
         "val_loss": val_loss,
+        "seed": seed,
     }
     torch.save(checkpoint, filepath)
 
@@ -88,7 +169,8 @@ def load_checkpoint(filepath, model, optimizer):
     optimizer.load_state_dict(checkpoint["optimizer_state_dict"])
     epoch = checkpoint["epoch"]
     val_loss = checkpoint.get("val_loss", float("inf"))
-    print(f"Loaded checkpoint '{filepath}' (Resuming from epoch {epoch})")
+    saved_seed = checkpoint.get("seed", "unknown")
+    print(f"Loaded checkpoint '{filepath}' (epoch {epoch}, seed={saved_seed})")
     return epoch, model, optimizer
 
 
@@ -98,8 +180,18 @@ def compute_wer(hypotheses, references):
     return jiwer.wer(ref_strs, hyp_strs)
 
 
-def train_step(model, optimizer, frames, frame_lengths, targets, target_lengths,
-                criterion, kl_weight=KL_WEIGHT, grad_clip=GRAD_CLIP, device=DEVICE):
+def train_step(
+    model,
+    optimizer,
+    frames,
+    frame_lengths,
+    targets,
+    target_lengths,
+    criterion,
+    kl_weight=KL_WEIGHT,
+    grad_clip=GRAD_CLIP,
+    device=DEVICE,
+):
     """
     Single training step on a batch.
     """
@@ -200,7 +292,9 @@ def evaluate(model, dataloader, criterion, id2gloss, device):
             target_lengths = batch["target_lengths"].to(device)
 
             outputs = model(frames, frame_lengths, keep_prob=1.0)
-            loss_dict = compute_cosign_loss(outputs, targets, target_lengths, criterion, kl_weight=0.0, keep_prob=1.0)
+            loss_dict = compute_cosign_loss(
+                outputs, targets, target_lengths, criterion, kl_weight=0.0, keep_prob=1.0
+            )
             total_loss += loss_dict["total"].item()
 
             logits = outputs["phi"]["main_logits"]
@@ -217,7 +311,11 @@ def evaluate(model, dataloader, criterion, id2gloss, device):
                     prev_token = token
                 all_hyps_phi.append([id2gloss.get(v, "") for v in hyp])
 
-                ref = [id2gloss.get(v.item(), "") for v in targets[i][:target_lengths[i]] if v.item() != 0]
+                ref = [
+                    id2gloss.get(v.item(), "")
+                    for v in targets[i][: target_lengths[i]]
+                    if v.item() != 0
+                ]
                 all_refs.append(ref)
 
     avg_wer = compute_wer(all_hyps_phi, all_refs)
@@ -231,7 +329,14 @@ def evaluate(model, dataloader, criterion, id2gloss, device):
 def main():
     os.makedirs(CHECKPOINT_DIR, exist_ok=True)
 
-    run_id = f"cosign_{time.strftime('%Y%m%d_%H%M%S')}"
+    set_seed(SEED, deterministic=DETERMINISTIC)
+    print(f"Using seed: {SEED} | Deterministic: {DETERMINISTIC}")
+
+    if REPRODUCING_RUN:
+        run_id = f"{original_run_id}_reproduction"
+    else:
+        run_id = f"cosign_{time.strftime('%Y%m%d_%H%M%S')}"
+
     tb_writer = SummaryWriter(os.path.join(LOG_DIR, run_id)) if LOG_TENSORBOARD else None
     if LOG_WANDB:
         wandb.init(project="cosign-sign-language", name=run_id, config=config, dir=LOG_DIR)
@@ -257,6 +362,9 @@ def main():
         dev_dataset = PhoenixDataset(DATA_DIR_DEV, ANN_DEV, gloss2id)
         collate_fn = phoenix_ctc_collate_fn
 
+    g = torch.Generator()
+    g.manual_seed(SEED)
+
     train_loader = DataLoader(
         train_dataset,
         batch_size=BATCH_SIZE,
@@ -264,6 +372,8 @@ def main():
         collate_fn=collate_fn,
         num_workers=NUM_WORKERS,
         pin_memory=PIN_MEMORY,
+        worker_init_fn=seed_worker,
+        generator=g,
     )
     dev_loader = DataLoader(
         dev_dataset,
@@ -272,6 +382,7 @@ def main():
         collate_fn=collate_fn,
         num_workers=NUM_WORKERS,
         pin_memory=PIN_MEMORY,
+        worker_init_fn=seed_worker,
     )
 
     total_train_batches = len(train_loader)
@@ -281,6 +392,30 @@ def main():
 
     optimizer = optim.AdamW(model.parameters(), lr=LEARNING_RATE, weight_decay=WEIGHT_DECAY)
     criterion = nn.CTCLoss(blank=0, reduction="mean", zero_infinity=True)
+
+    run_manifest_path = os.path.join(CHECKPOINT_DIR, f"{run_id}_training_run.json")
+    extra_info = {
+        "run_id": run_id,
+        "num_classes": num_classes,
+        "train_samples": len(train_dataset),
+        "dev_samples": len(dev_dataset),
+        "device": str(DEVICE),
+    }
+    if REPRODUCING_RUN:
+        extra_info.update(
+            {
+                "is_reproduction": True,
+                "original_run_id": original_run_id,
+                "original_manifest_path": args.reproduce_run,
+            }
+        )
+    save_training_run(
+        run_manifest_path,
+        config,
+        SEED,
+        DETERMINISTIC,
+        extra_info=extra_info,
+    )
 
     start_epoch = 0
     latest_ckpt = os.path.join(CHECKPOINT_DIR, "latest.pth")
@@ -312,8 +447,16 @@ def main():
             target_lengths = batch["target_lengths"].to(DEVICE)
 
             loss_orig, keep_prob_orig = train_step(
-                model, optimizer, frames, frame_lengths, targets, target_lengths,
-                criterion, KL_WEIGHT, GRAD_CLIP, DEVICE
+                model,
+                optimizer,
+                frames,
+                frame_lengths,
+                targets,
+                target_lengths,
+                criterion,
+                KL_WEIGHT,
+                GRAD_CLIP,
+                DEVICE,
             )
             total_train_loss += loss_orig
             num_batches += 1
@@ -321,8 +464,16 @@ def main():
             if MIRROR_DATA:
                 frames_mirrored = mirror_batch(frames, frame_lengths)
                 loss_mirrored, keep_prob_mirrored = train_step(
-                    model, optimizer, frames_mirrored, frame_lengths, targets, target_lengths,
-                    criterion, KL_WEIGHT, GRAD_CLIP, DEVICE
+                    model,
+                    optimizer,
+                    frames_mirrored,
+                    frame_lengths,
+                    targets,
+                    target_lengths,
+                    criterion,
+                    KL_WEIGHT,
+                    GRAD_CLIP,
+                    DEVICE,
                 )
                 total_train_loss += loss_mirrored
                 num_batches += 1
@@ -351,15 +502,43 @@ def main():
         if LOG_WANDB:
             wandb.log(epoch_metrics, step=epoch + 1)
 
-        print(f"Epoch {epoch+1} done. Train: {avg_train_loss:.4f}, Val: {val_loss:.4f}, WER: {avg_wer:.3f}")
+        print(
+            f"Epoch {epoch + 1} done. Train: {avg_train_loss:.4f}, Val: {val_loss:.4f}, WER: {avg_wer:.3f}"
+        )
 
-        save_checkpoint(model, optimizer, epoch + 1, gloss2id, val_loss, latest_ckpt)
+        save_checkpoint(model, optimizer, epoch + 1, gloss2id, val_loss, SEED, latest_ckpt)
 
         if avg_wer < best_wer:
             best_wer = avg_wer
             best_path = os.path.join(CHECKPOINT_DIR, "best_model.pth")
-            save_checkpoint(model, optimizer, epoch + 1, gloss2id, val_loss, best_path)
+            save_checkpoint(model, optimizer, epoch + 1, gloss2id, val_loss, SEED, best_path)
             print(f"-> NEW BEST WER: {best_wer:.3f}")
+            extra_info = {
+                "run_id": run_id,
+                "num_classes": num_classes,
+                "train_samples": len(train_dataset),
+                "dev_samples": len(dev_dataset),
+                "device": str(DEVICE),
+                "best_wer": best_wer,
+                "best_wer_epoch": epoch + 1,
+                "best_train_loss": avg_train_loss,
+                "best_val_loss": val_loss,
+            }
+            if REPRODUCING_RUN:
+                extra_info.update(
+                    {
+                        "is_reproduction": True,
+                        "original_run_id": original_run_id,
+                        "original_manifest_path": args.reproduce_run,
+                    }
+                )
+            save_training_run(
+                run_manifest_path,
+                config,
+                SEED,
+                DETERMINISTIC,
+                extra_info=extra_info,
+            )
 
     if tb_writer:
         tb_writer.close()
