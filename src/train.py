@@ -133,8 +133,10 @@ else:
 CHECKPOINT_DIR = config["system"]["checkpoint_dir"]
 DATA_DIR_TRAIN = config["data"]["train_dir"]
 DATA_DIR_DEV = config["data"]["dev_dir"]
+DATA_DIR_TEST = config["data"]["test_dir"]
 ANN_TRAIN = config["data"]["train_ann"]
 ANN_DEV = config["data"]["dev_ann"]
+ANN_TEST = config["data"]["test_ann"]
 NUM_WORKERS = config["data"]["num_workers"]
 PIN_MEMORY = config["data"]["pin_memory"]
 
@@ -200,8 +202,10 @@ def train_step(
     frames_permuted = frames.permute(0, 3, 1, 2)  # [B, C, T, V]
 
     beta_dist = torch.distributions.beta.Beta(2.0, 2.0)
-    dynamic_keep_prob = beta_dist.sample().item()
-    dynamic_keep_prob = max(0.1, min(0.9, dynamic_keep_prob))
+    # dynamic_keep_prob = beta_dist.sample().item()
+    # dynamic_keep_prob = max(0.1, min(0.9, dynamic_keep_prob))
+    dynamic_keep_prob = 0.8
+
 
     outputs = model(frames_permuted, frame_lengths, keep_prob=dynamic_keep_prob)
 
@@ -364,6 +368,7 @@ def main():
 
     g = torch.Generator()
     g.manual_seed(SEED)
+    num_classes = len(gloss2id)
 
     train_loader = DataLoader(
         train_dataset,

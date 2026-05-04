@@ -109,6 +109,10 @@ class PJMDataset(Dataset):
 
         self.samples = []
         for stem, ann in self.annotations.items():
+            signer = stem.split("_")[0]
+            if signer == "8" or signer == "2":
+                continue
+
             file_path = self.data_dir / f"{stem}.npy"
             if not file_path.exists():
                 continue

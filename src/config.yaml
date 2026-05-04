@@ -8,8 +8,6 @@ training:
   lm_model: "4gram.arpa"
   lexicon: "lexicon.txt"
   mirror_data: false
-  seed: 42
-  deterministic: true
 
 model:
   dropout: 0.2
