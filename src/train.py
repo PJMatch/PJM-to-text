@@ -18,7 +18,8 @@ except ImportError:
     WANDB_AVAILABLE = False
 
 from model import CoSign1SModel
-from phoenix_dataloader import PhoenixDataset, build_gloss_vocab, phoenix_ctc_collate_fn
+from phoenix_dataloader import PhoenixDataset, build_gloss_vocab as build_phoenix_vocab, phoenix_ctc_collate_fn
+from pjm_dataloader import PJMDataset, build_gloss_vocab as build_pjm_vocab, pjm_ctc_collate_fn
 
 
 def mirror_batch(frames, frame_lengths):
@@ -51,8 +52,10 @@ else:
 CHECKPOINT_DIR = config["system"]["checkpoint_dir"]
 DATA_DIR_TRAIN = config["data"]["train_dir"]
 DATA_DIR_DEV = config["data"]["dev_dir"]
+DATA_DIR_TEST = config["data"]["test_dir"]
 ANN_TRAIN = config["data"]["train_ann"]
 ANN_DEV = config["data"]["dev_ann"]
+ANN_TEST = config["data"]["test_ann"]
 NUM_WORKERS = config["data"]["num_workers"]
 PIN_MEMORY = config["data"]["pin_memory"]
 
@@ -107,8 +110,10 @@ def train_step(model, optimizer, frames, frame_lengths, targets, target_lengths,
     frames_permuted = frames.permute(0, 3, 1, 2)  # [B, C, T, V]
 
     beta_dist = torch.distributions.beta.Beta(2.0, 2.0)
-    dynamic_keep_prob = beta_dist.sample().item()
-    dynamic_keep_prob = max(0.1, min(0.9, dynamic_keep_prob))
+    # dynamic_keep_prob = beta_dist.sample().item()
+    # dynamic_keep_prob = max(0.1, min(0.9, dynamic_keep_prob))
+    dynamic_keep_prob = 0.8
+
 
     outputs = model(frames_permuted, frame_lengths, keep_prob=dynamic_keep_prob)
 
@@ -236,18 +241,31 @@ def main():
         wandb.init(project="cosign-sign-language", name=run_id, config=config, dir=LOG_DIR)
 
     print("Building vocabulary")
-    gloss2id, id2gloss = build_gloss_vocab([ANN_TRAIN, ANN_DEV])
-    num_classes = len(gloss2id)
+    dataset_type = config.get("data", {}).get("dataset", "phoenix")
 
-    print("Loading full datasets")
-    train_dataset = PhoenixDataset(DATA_DIR_TRAIN, ANN_TRAIN, gloss2id)
-    dev_dataset = PhoenixDataset(DATA_DIR_DEV, ANN_DEV, gloss2id)
+    if dataset_type == "pjm":
+        ann_dir = config["data"]["annotation_dir"]
+        splits = [ANN_TRAIN, ANN_DEV]
+        gloss2id, id2gloss = build_pjm_vocab(ann_dir, splits)
+
+        train_dataset = PJMDataset(DATA_DIR_TRAIN, ann_dir, ANN_TRAIN, gloss2id)
+        dev_dataset = PJMDataset(DATA_DIR_DEV, ann_dir, ANN_DEV, gloss2id, split="test")
+        collate_fn = pjm_ctc_collate_fn
+    else:
+        splits = [ANN_TRAIN, ANN_DEV]
+        gloss2id, id2gloss = build_phoenix_vocab(splits)
+
+        train_dataset = PhoenixDataset(DATA_DIR_TRAIN, ANN_TRAIN, gloss2id)
+        dev_dataset = PhoenixDataset(DATA_DIR_DEV, ANN_DEV, gloss2id)
+        collate_fn = phoenix_ctc_collate_fn
+
+    num_classes = len(gloss2id)
 
     train_loader = DataLoader(
         train_dataset,
         batch_size=BATCH_SIZE,
         shuffle=True,
-        collate_fn=phoenix_ctc_collate_fn,
+        collate_fn=collate_fn,
         num_workers=NUM_WORKERS,
         pin_memory=PIN_MEMORY,
     )
@@ -255,7 +273,7 @@ def main():
         dev_dataset,
         batch_size=BATCH_SIZE,
         shuffle=False,
-        collate_fn=phoenix_ctc_collate_fn,
+        collate_fn=collate_fn,
         num_workers=NUM_WORKERS,
         pin_memory=PIN_MEMORY,
     )
