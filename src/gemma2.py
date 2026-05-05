@@ -1,7 +1,8 @@
+import time
 import torch
 from transformers import AutoModelForCausalLM, AutoTokenizer, BitsAndBytesConfig
 
-MODEL_ID = "google/gemma-2-2b-it"
+MODEL_ID = "speakleash/Bielik-7B-Instruct-v0.1"
 
 SYSTEM_INSTRUCTION = """Jesteś profesjonalnym tłumaczem Polskiego Języka Migowego (PJM).
 Twoim zadaniem jest przekształcenie surowych glosów PJM w poprawne, naturalnie brzmiące zdania w języku polskim.
@@ -23,20 +24,14 @@ Zadanie:
 Glosy: {glosses}
 """
 
-TEST_CASES = [
-    "JA JUTRO KINO IŚĆ CHCEĆ",
-    "KOBIETA PIES WIDZIEĆ UCIEKAĆ BAĆ-SIĘ",
-    "TY KSIĄŻKA CZYTAĆ LUBIĆ CZY",
-    "MÓJ BRAT SAMOCHÓD NOWY KUPIĆ WCZORAJ",
-    "DZIECKO PŁAKAĆ BO ZABAWKA ZEPSUĆ",
-]
-
 
 def main() -> None:
     """
-    Main function to load the quantized Gemma model and run PJM translation tests locally.
+    Main function to load the quantized Bielik model and run 
+    real-time PJM translation tests with performance tracking.
     """
-    
+    print("Loading and quantizing the model into VRAM (this might take a moment)...")
+
     tokenizer = AutoTokenizer.from_pretrained(MODEL_ID)
 
     quantization_config = BitsAndBytesConfig(
@@ -50,10 +45,22 @@ def main() -> None:
         device_map="auto",
     )
 
-    print("\dziala\n")
+    print("\n" + "=" * 50)
+    print(" SYSTEM READY! ENTER PJM GLOSSES.")
+    print(" To exit, type: 'q', 'exit' or 'quit'")
+    print("=" * 50 + "\n")
 
-    for gloss in TEST_CASES:
-        prompt_text = SYSTEM_INSTRUCTION.format(glosses=gloss)
+    while True:
+        user_input = input("Your PJM glosses: ")
+        
+        if user_input.lower() in ["q", "exit", "quit"]:
+            print("Closing the program...")
+            break
+            
+        if not user_input.strip():
+            continue
+
+        prompt_text = SYSTEM_INSTRUCTION.format(glosses=user_input)
 
         chat = [{"role": "user", "content": prompt_text}]
         prompt = tokenizer.apply_chat_template(
@@ -63,6 +70,8 @@ def main() -> None:
         )
 
         inputs = tokenizer(prompt, return_tensors="pt").to(model.device)
+
+        start_time = time.perf_counter()
 
         outputs = model.generate(
             **inputs,
@@ -78,9 +87,13 @@ def main() -> None:
             skip_special_tokens=True,
         )
 
-        print(f"Input glosses: {gloss}")
-        print(f"Gemma output:  {response.strip()}")
-        print("-" * 40)
+        end_time = time.perf_counter()
+        
+        translation_time = end_time - start_time
+
+        print(f"Bielik output:   {response.strip()}")
+        print(f"[Response time:  {translation_time:.2f} seconds]")
+        print("-" * 50)
 
 
 if __name__ == "__main__":
