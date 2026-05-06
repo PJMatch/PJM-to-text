@@ -5,11 +5,9 @@ import numpy as np
 import torch
 import torch.nn as nn
 
-# External imports from the COPIED stgcn folder
 from stgcn.gso import GSOGenerator
 from stgcn.stgcn_src.models import STGCNGraphConv as STGCN
 
-# Local sandbox import
 from debug_exporter import export_tensor_for_pil
 
 CONST_KS = 2
@@ -64,9 +62,7 @@ class STGCNCoSign1s(nn.Module):
     def __init__(self, config_path=None):
         super().__init__()
 
-        # Fixing config path to point to the local stgcn folder
         if config_path is None:
-            # We assume 'stgcn' folder was copied into the same directory as this script
             current_dir = Path(__file__).resolve().parent
             config_path = current_dir / "stgcn" / "config.json"
 
@@ -169,7 +165,6 @@ class STGCNCoSign1s(nn.Module):
             ("r_hand", "hands"),
         ]:
             feat = self.gcn_modules[module_name](centralized_groups[name])
-            # Global average pooling over vertices
             feat = feat.mean(dim=-1)
             features.append(feat)
 
