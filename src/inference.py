@@ -9,7 +9,8 @@ from torch.utils.data import DataLoader
 from torchaudio.models.decoder import ctc_decoder
 
 from model import CoSign1SModel
-from phoenix_dataloader import PhoenixDataset, phoenix_ctc_collate_fn, build_gloss_vocab
+from phoenix_dataloader import PhoenixDataset, phoenix_ctc_collate_fn, build_gloss_vocab as build_phoenix_vocab
+from pjm_dataloader import PJMDataset, pjm_ctc_collate_fn, build_gloss_vocab as build_pjm_vocab
 
 
 def load_config(config_path="config.yaml"):
@@ -98,23 +99,42 @@ def main():
     )
 
     print("Building vocabulary")
-    gloss2id, id2gloss = build_gloss_vocab([config["data"]["train_ann"], config["data"]["dev_ann"]])
-    num_classes = len(gloss2id)
+    dataset_type = config.get("data", {}).get("dataset", "phoenix")
 
-    print("Loading test dataset")
-    test_dataset = PhoenixDataset(
-        data_dir=config["data"]["dev_dir"],
-        annotation_file=config["data"]["dev_ann"],
-        gloss2id=gloss2id,
-        split="test",
-        use_temporal_aug=False,
-    )
+    if dataset_type == "pjm":
+        annotation_dir = config["data"]["annotation_dir"]
+        gloss2id, id2gloss = build_pjm_vocab(annotation_dir, [config["data"]["train_ann"], config["data"]["dev_ann"], config["data"]["test_ann"]])
+        num_classes = len(gloss2id)
+
+        print("Loading PJM test dataset")
+        test_dataset = PJMDataset(
+            data_dir=config["data"]["test_dir"],
+            annotation_dir=annotation_dir,
+            split_file=config["data"]["test_ann"],
+            gloss2id=gloss2id,
+            split="test",
+            use_temporal_aug=False,
+        )
+        collate_fn = pjm_ctc_collate_fn
+    else:
+        gloss2id, id2gloss = build_phoenix_vocab([config["data"]["train_ann"], config["data"]["dev_ann"]])
+        num_classes = len(gloss2id)
+
+        print("Loading Phoenix test dataset")
+        test_dataset = PhoenixDataset(
+            data_dir=config["data"]["test_dir"],
+            annotation_file=config["data"]["test_ann"],
+            gloss2id=gloss2id,
+            split="test",
+            use_temporal_aug=False,
+        )
+        collate_fn = phoenix_ctc_collate_fn
 
     test_loader = DataLoader(
         test_dataset,
         batch_size=config["training"]["batch_size"],
         shuffle=False,
-        collate_fn=phoenix_ctc_collate_fn,
+        collate_fn=collate_fn,
         num_workers=config["data"]["num_workers"],
     )
 
@@ -183,9 +203,6 @@ def main():
                 print(f"HYP : {hyp_str}")
                 print("-" * 50)
 
-    print("\n" + "=" * 50)
-    print("FINAL EVALUATION STATISTICS")
-    print("=" * 50)
 
     out = jiwer.process_words(all_refs, all_hyps)
 
