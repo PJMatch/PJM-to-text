@@ -15,3 +15,6 @@ src/pheonix-dataset
 *$py.class
 *.pth
 *.task
+process_visualization_scripts/debug/*.npy
+process_visualization_scripts/debug/stgcn/
+process_visualization_scripts/debug/__pycache__/

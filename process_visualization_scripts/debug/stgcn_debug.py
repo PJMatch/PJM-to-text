@@ -5,9 +5,12 @@ import numpy as np
 import torch
 import torch.nn as nn
 
+# External imports from the COPIED stgcn folder
 from stgcn.gso import GSOGenerator
 from stgcn.stgcn_src.models import STGCNGraphConv as STGCN
-from process_visualization_scripts.debug_exporter import export_tensor_for_pil
+
+# Local sandbox import
+from debug_exporter import export_tensor_for_pil
 
 CONST_KS = 2
 
@@ -61,10 +64,11 @@ class STGCNCoSign1s(nn.Module):
     def __init__(self, config_path=None):
         super().__init__()
 
-        # Fixing config path to point to original stgcn module
+        # Fixing config path to point to the local stgcn folder
         if config_path is None:
-            current_dir = Path(__file__).resolve().parent.parent / "stgcn"
-            config_path = current_dir / "config.json"
+            # We assume 'stgcn' folder was copied into the same directory as this script
+            current_dir = Path(__file__).resolve().parent
+            config_path = current_dir / "stgcn" / "config.json"
 
         self.gso_generator = GSOGenerator(config_path)
         self.config = self.gso_generator.config
@@ -128,6 +132,7 @@ class STGCNCoSign1s(nn.Module):
 
             group_data = x[:, :, :, global_indices]
 
+            # Equation (2) centralization
             root_point = group_data[:, :, :, 0].unsqueeze(-1)
             centralized_groups[name] = group_data - root_point
 
@@ -137,18 +142,17 @@ class STGCNCoSign1s(nn.Module):
         # ====================================================
         if "checkpoint_2_anchored" not in getattr(self, "_exported", []):
             try:
-                # Rebuild full tensor [B, 3, T, 553] with zeros
                 B, C, T, _ = x.shape
                 anchored_x = torch.zeros((B, C, T, 553), device=x.device, dtype=x.dtype)
                 
-                # We won't map 'mouth' since our visualizer uses full 'face'
                 for name in ["body", "face", "l_hand", "r_hand"]:
                     local_indices = np.array(self.config[name])
-                    global_indices = local_indices + self.offsets[name]
+                    # Ensure indices are Python list for proper torch indexing
+                    global_indices = (local_indices + self.offsets[name]).tolist()
                     anchored_x[:, :, :, global_indices] = centralized_groups[name]
                 
-                export_tensor_for_pil(anchored_x, "process_visualization_scripts/checkpoint_2_anchored.npy")
-                # Ensure we only export once per session
+                export_tensor_for_pil(anchored_x, "checkpoint_2_anchored.npy")
+                
                 if not hasattr(self, "_exported"):
                     self._exported = []
                 self._exported.append("checkpoint_2_anchored")
@@ -165,6 +169,7 @@ class STGCNCoSign1s(nn.Module):
             ("r_hand", "hands"),
         ]:
             feat = self.gcn_modules[module_name](centralized_groups[name])
+            # Global average pooling over vertices
             feat = feat.mean(dim=-1)
             features.append(feat)
 

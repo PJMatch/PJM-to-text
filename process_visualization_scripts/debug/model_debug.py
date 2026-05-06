@@ -3,10 +3,8 @@ import torch.nn as nn
 import torch.nn.functional as F
 from torch.nn.utils.rnn import pack_padded_sequence, pad_packed_sequence
 
-# Sandbox imports: our exporter and our soon-to-be-created STGCN clone
-from process_visualization_scripts.debug_exporter import export_tensor_for_pil, export_latent_heatmap
-from process_visualization_scripts.stgcn_debug import STGCNCoSign1s
-
+from debug_exporter import export_tensor_for_pil, export_latent_heatmap
+from stgcn_debug import STGCNCoSign1s
 
 class CoSignTemporalCNN(nn.Module):
     """Temporal module: C3-P2-C3-P2."""
@@ -107,17 +105,7 @@ class SharedGlossHead(nn.Module):
 
 
 class CoSign1SModel(nn.Module):
-    """
-    One-stream CoSign model with complementary masking:
-
-    ST-GCN (with masking & fusion) -> [B, 2, 1024, T]
-        branch 0: phi
-        branch 1: 1 - phi
-
-    For each branch:
-        1D CNN -> aux gloss head (CTC)
-        BiLSTM -> main gloss head (CTC)
-    """
+    """One-stream CoSign model with complementary masking."""
 
     def __init__(
         self,
@@ -150,58 +138,46 @@ class CoSign1SModel(nn.Module):
         )
 
     def _forward_branch(self, x_branch, lengths):
-        """
-        One complementary branch:
-        x_branch: [B, 1024, T]
-        lengths:  [B]
-        """
         cnn_feat, out_lengths = self.temporal_cnn(x_branch, lengths)
 
         B, C, T_prime = cnn_feat.shape
         device = cnn_feat.device
 
-        time_steps = torch.arange(T_prime, device=device).unsqueeze(0)  # [1, T']
-        length_tensor = out_lengths.unsqueeze(1)  # [B, 1]
+        time_steps = torch.arange(T_prime, device=device).unsqueeze(0)
+        length_tensor = out_lengths.unsqueeze(1)
 
         mask = time_steps < length_tensor
-        mask = mask.unsqueeze(1).expand_as(cnn_feat)  # [B, 1024, T']
+        mask = mask.unsqueeze(1).expand_as(cnn_feat)
 
         cnn_feat = cnn_feat * mask
 
-        aux_feat = cnn_feat.transpose(1, 2)  # [B, T', 1024]
-        aux_logits = self.gloss_head(aux_feat)  # [B, T', V]
+        aux_feat = cnn_feat.transpose(1, 2)
+        aux_logits = self.gloss_head(aux_feat)
 
         lstm_out = self.context_lstm(cnn_feat, out_lengths)
-        main_logits = self.gloss_head(lstm_out)  # [B, T', V]
+        main_logits = self.gloss_head(lstm_out)
 
         return {
-            "cnn_feat": cnn_feat,  # [B, 1024, T']
-            "aux_logits": aux_logits,  # [B, T', V]
-            "main_logits": main_logits,  # [B, T', V]
-            "logit_lengths": out_lengths,  # [B]
+            "cnn_feat": cnn_feat,
+            "aux_logits": aux_logits,
+            "main_logits": main_logits,
+            "logit_lengths": out_lengths,
         }
 
     def forward(self, x, lengths, keep_prob=1):
-        """
-        x:        [B, 3, T, V_total]  (mediapipe skeleton input)
-        lengths:  [B]  original sequence lengths
-        keep_prob: masking keep probability
-        Returns a dict with predictions for both complementary branches.
-        """
-        
         # ====================================================
         # CHECKPOINT 1: Raw input straight from Dataloader
         # ====================================================
-        export_tensor_for_pil(x, "process_visualization_scripts/checkpoint_1_raw.npy")
+        export_tensor_for_pil(x, "checkpoint_1_raw.npy")
 
-        branches = self.STGCN(x, keep_prob=keep_prob)  # [B, 2, 1024, T]
-        branch_phi = branches[:, 0, ...]  # [B, 1024, T]
-        branch_phi_inv = branches[:, 1, ...]  # [B, 1024, T]
+        branches = self.STGCN(x, keep_prob=keep_prob)
+        branch_phi = branches[:, 0, ...]
+        branch_phi_inv = branches[:, 1, ...]
 
         # ====================================================
         # CHECKPOINT 3: Output from STGCN (Latent Space)
         # ====================================================
-        export_latent_heatmap(branch_phi, "process_visualization_scripts/checkpoint_3_latent.npy")
+        export_latent_heatmap(branch_phi, "checkpoint_3_latent.npy")
 
         out_phi = self._forward_branch(branch_phi, lengths)
         out_phi_inv = self._forward_branch(branch_phi_inv, lengths)
@@ -210,11 +186,3 @@ class CoSign1SModel(nn.Module):
             "phi": out_phi,
             "phi_inv": out_phi_inv,
         }
-
-if __name__ == "__main__":
-    # Test block
-    model = CoSign1SModel(num_classes=1000)
-    x = torch.randn(4, 3, 300, 553)
-    lengths = torch.tensor([300, 250, 200, 150])
-    outputs = model(x, lengths)
-    print(f"phi main: {outputs['phi']['main_logits'].shape}")
