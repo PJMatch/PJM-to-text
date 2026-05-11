@@ -137,10 +137,10 @@ else:
 CHECKPOINT_DIR = config["system"]["checkpoint_dir"]
 DATA_DIR_TRAIN = config["data"]["train_dir"]
 DATA_DIR_DEV = config["data"]["dev_dir"]
-DATA_DIR_TEST = config["data"]["test_dir"]
+DATA_DIR_TEST = config["data"].get("test_dir", "pjm_dataset")  # Optional, for future use
 ANN_TRAIN = config["data"]["train_ann"]
 ANN_DEV = config["data"]["dev_ann"]
-ANN_TEST = config["data"]["test_ann"]
+ANN_TEST = config["data"].get("test_ann", "annotations/PJM.test.txt")  # Optional, for future use
 NUM_WORKERS = config["data"]["num_workers"]
 PIN_MEMORY = config["data"]["pin_memory"]
 
@@ -333,6 +333,11 @@ def evaluate(model, dataloader, criterion, id2gloss, device):
             )
             total_loss += loss_dict["total"].item()
 
+            logits = outputs["phi"]["main_logits"]
+            seq_lengths = outputs["phi"]["logit_lengths"]
+            preds = torch.argmax(logits, dim=-1)
+
+            # Diagnostic logging (runs once)
             if not hasattr(evaluate, "_diag_done"):
                 evaluate._diag_done = True
                 seq_len_0 = seq_lengths[0].item()
@@ -346,10 +351,6 @@ def evaluate(model, dataloader, criterion, id2gloss, device):
                       f"max={max_sim.max().item():.3f} scale={scale_val:.2f}")
                 print(f"[DIAG] blank_frac={blank_frac:.3f} non_blank_tokens={non_blank}/{seq_len_0}")
                 print(f"[DIAG] ctc_aux={loss_dict['ctc_aux'].item():.3f} ctc_main={loss_dict['ctc_main'].item():.3f}")
-
-            logits = outputs["phi"]["main_logits"]
-            seq_lengths = outputs["phi"]["logit_lengths"]
-            preds = torch.argmax(logits, dim=-1)
 
             for i in range(targets.size(0)):
                 hyp = []
