@@ -124,6 +124,10 @@ WEIGHT_DECAY = float(config["training"]["weight_decay"])
 GRAD_CLIP = float(config["training"]["grad_clip"])
 KL_WEIGHT = float(config["training"]["kl_weight"])
 MIRROR_DATA = config["training"]["mirror_data"]
+KEEP_PROB = config["training"].get("keep_prob", 0.8)
+INIT_WEIGHTS = config["training"].get("init_weights", None)
+KL_WARMUP_START = config["training"].get("kl_warmup_start", 5)
+KL_WARMUP_END = config["training"].get("kl_warmup_end", 10)
 
 if config["system"]["device"] == "auto":
     DEVICE = torch.device("cuda" if torch.cuda.is_available() else "cpu")
@@ -182,6 +186,39 @@ def compute_wer(hypotheses, references):
     return jiwer.wer(ref_strs, hyp_strs)
 
 
+def _masked_kl_symmetric(p_logits, q_logits, lengths):
+    """Symmetric KL averaged only over valid (non-padded) timesteps."""
+    p_log = F.log_softmax(p_logits, dim=-1)
+    q_log = F.log_softmax(q_logits, dim=-1)
+    p_soft = p_log.exp()
+    q_soft = q_log.exp()
+
+    kl_pq = (p_soft * (p_log - q_log)).sum(dim=-1)
+    kl_qp = (q_soft * (q_log - p_log)).sum(dim=-1)
+    kl_per_token = kl_pq + kl_qp
+
+    B, T = kl_per_token.shape
+    time_idx = torch.arange(T, device=kl_per_token.device).unsqueeze(0)
+    mask = (time_idx < lengths.unsqueeze(1)).float()
+
+    valid_count = mask.sum().clamp_min(1.0)
+    return (kl_per_token * mask).sum() / valid_count
+
+
+def get_keep_prob(epoch):
+    """Keep probability (can be made dynamic in the future)."""
+    return KEEP_PROB
+
+
+def get_kl_weight(epoch):
+    """KL active from ep KL_WARMUP_START, linear to ep KL_WARMUP_END."""
+    if epoch < KL_WARMUP_START:
+        return 0.0
+    if epoch < KL_WARMUP_END:
+        return KL_WEIGHT * ((epoch - KL_WARMUP_START) / (KL_WARMUP_END - KL_WARMUP_START))
+    return KL_WEIGHT
+
+
 def train_step(
     model,
     optimizer,
@@ -191,6 +228,7 @@ def train_step(
     target_lengths,
     criterion,
     kl_weight=KL_WEIGHT,
+    keep_prob=KEEP_PROB,
     grad_clip=GRAD_CLIP,
     device=DEVICE,
 ):
@@ -204,7 +242,7 @@ def train_step(
     beta_dist = torch.distributions.beta.Beta(2.0, 2.0)
     # dynamic_keep_prob = beta_dist.sample().item()
     # dynamic_keep_prob = max(0.1, min(0.9, dynamic_keep_prob))
-    dynamic_keep_prob = 0.8
+    dynamic_keep_prob = keep_prob
 
 
     outputs = model(frames_permuted, frame_lengths, keep_prob=dynamic_keep_prob)
@@ -245,39 +283,33 @@ def compute_cosign_loss(
             loss = criterion(log_probs, targets, logit_lengths, target_lengths)
             ctc_losses.append(loss)
 
-    ctc_loss = torch.stack(ctc_losses).mean()
+    if keep_prob == 1.0:
+        ctc_loss = torch.stack(ctc_losses).sum()
+    else:
+        ctc_loss = 0.5 * torch.stack(ctc_losses).sum()
     total_loss = ctc_loss
     kl_loss = torch.tensor(0.0, device=ctc_loss.device)
 
     if keep_prob < 1.0:
-        T_prime = outputs["phi"]["aux_logits"].size(1)
-
-        aux_phi = F.log_softmax(outputs["phi"]["aux_logits"], dim=-1)
-        aux_phibar = F.log_softmax(outputs["phi_inv"]["aux_logits"], dim=-1)
-        aux_phi_soft = F.softmax(aux_phi, dim=-1)
-        aux_phibar_soft = F.softmax(aux_phibar, dim=-1)
-
-        kl_aux = F.kl_div(aux_phi, aux_phibar_soft, reduction="batchmean") + F.kl_div(
-            aux_phibar, aux_phi_soft, reduction="batchmean"
+        logit_lengths = outputs["phi"]["logit_lengths"]
+        kl_aux = _masked_kl_symmetric(
+            outputs["phi"]["aux_logits"],
+            outputs["phi_inv"]["aux_logits"],
+            logit_lengths,
         )
-        kl_aux = kl_aux / T_prime
-
-        main_phi = F.log_softmax(outputs["phi"]["main_logits"], dim=-1)
-        main_phibar = F.log_softmax(outputs["phi_inv"]["main_logits"], dim=-1)
-        main_phi_soft = F.softmax(main_phi, dim=-1)
-        main_phibar_soft = F.softmax(main_phibar, dim=-1)
-
-        kl_main = F.kl_div(main_phi, main_phibar_soft, reduction="batchmean") + F.kl_div(
-            main_phibar, main_phi_soft, reduction="batchmean"
+        kl_main = _masked_kl_symmetric(
+            outputs["phi"]["main_logits"],
+            outputs["phi_inv"]["main_logits"],
+            logit_lengths,
         )
-        kl_main = kl_main / T_prime
-
-        kl_loss = (kl_aux + kl_main) * 0.5 * kl_weight
+        kl_loss = (kl_aux + kl_main) * kl_weight
         total_loss += kl_loss
 
     return {
         "total": total_loss,
         "ctc": ctc_loss,
+        "ctc_aux": ctc_losses[0].detach(),
+        "ctc_main": ctc_losses[1].detach() if len(ctc_losses) > 1 else torch.tensor(0.0, device=ctc_loss.device),
         "kl": kl_loss,
     }
 
@@ -300,6 +332,20 @@ def evaluate(model, dataloader, criterion, id2gloss, device):
                 outputs, targets, target_lengths, criterion, kl_weight=0.0, keep_prob=1.0
             )
             total_loss += loss_dict["total"].item()
+
+            if not hasattr(evaluate, "_diag_done"):
+                evaluate._diag_done = True
+                seq_len_0 = seq_lengths[0].item()
+                max_sim = logits[0, :seq_len_0].max(dim=-1).values
+                blank_frac = (preds[0, :seq_len_0] == 0).float().mean().item()
+                non_blank = (preds[0, :seq_len_0] != 0).sum().item()
+                scale_val = model.gloss_head.scale.item() if hasattr(model, "gloss_head") else float("nan")
+                print(f"[DIAG] frames: min={frames.min().item():.3f} max={frames.max().item():.3f} "
+                      f"mean={frames.mean().item():.3f} std={frames.std().item():.3f}")
+                print(f"[DIAG] max_sim: mean={max_sim.mean().item():.3f} "
+                      f"max={max_sim.max().item():.3f} scale={scale_val:.2f}")
+                print(f"[DIAG] blank_frac={blank_frac:.3f} non_blank_tokens={non_blank}/{seq_len_0}")
+                print(f"[DIAG] ctc_aux={loss_dict['ctc_aux'].item():.3f} ctc_main={loss_dict['ctc_main'].item():.3f}")
 
             logits = outputs["phi"]["main_logits"]
             seq_lengths = outputs["phi"]["logit_lengths"]
@@ -398,6 +444,15 @@ def main():
     optimizer = optim.AdamW(model.parameters(), lr=LEARNING_RATE, weight_decay=WEIGHT_DECAY)
     criterion = nn.CTCLoss(blank=0, reduction="mean", zero_infinity=True)
 
+    if INIT_WEIGHTS and os.path.exists(INIT_WEIGHTS):
+        print(f"Loading initial weights from: {INIT_WEIGHTS}")
+        ckpt = torch.load(INIT_WEIGHTS, map_location=DEVICE, weights_only=False)
+        model.load_state_dict(ckpt["model_state_dict"])
+        print(f"  -> Loaded weights from epoch {ckpt.get('epoch', '?')}, "
+              f"val_loss={ckpt.get('val_loss', '?')}")
+        print(f"  -> Optimizer is FRESH (LR={LEARNING_RATE})")
+        print(f"  -> Epoch counter starts at 0 (milestones={OPTIMIZER_MILESTONES})")
+
     run_manifest_path = os.path.join(CHECKPOINT_DIR, f"{run_id}_training_run.json")
     extra_info = {
         "run_id": run_id,
@@ -439,11 +494,15 @@ def main():
         for param_group in optimizer.param_groups:
             param_group["lr"] = current_lr
 
+        current_kl_weight = get_kl_weight(epoch)
+        current_keep_prob = get_keep_prob(epoch)
+
         model.train()
         total_train_loss = 0
         num_batches = 0
 
-        print(f"Epoch {epoch + 1:3d} | Learning rate: {current_lr:.2e}")
+        print(f"Epoch {epoch + 1:3d} | LR: {current_lr:.2e} | "
+              f"keep_prob: {current_keep_prob:.3f} | kl_weight: {current_kl_weight:.3f}")
 
         for batch_idx, batch in enumerate(train_loader):
             frames = batch["frames"].to(DEVICE)  # [B, T, V, C]
@@ -459,7 +518,8 @@ def main():
                 targets,
                 target_lengths,
                 criterion,
-                KL_WEIGHT,
+                current_kl_weight,
+                current_keep_prob,
                 GRAD_CLIP,
                 DEVICE,
             )
@@ -476,7 +536,8 @@ def main():
                     targets,
                     target_lengths,
                     criterion,
-                    KL_WEIGHT,
+                    current_kl_weight,
+                    current_keep_prob,
                     GRAD_CLIP,
                     DEVICE,
                 )
