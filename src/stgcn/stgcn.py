@@ -133,6 +133,12 @@ class STGCNCoSign1s(nn.Module):
         num_groups_for_fusion = 5
         self.fusion_in_dim = num_groups_for_fusion * self.gcn_out_dim
 
+        # Per-group BatchNorm for confidence-aware centralization (as in mmpose-trainingv2)
+        self.data_bn = nn.ModuleDict()
+        for name in ["body", "face", "mouth", "l_hand", "r_hand"]:
+            n_local = len(self.config[name])
+            self.data_bn[name] = nn.BatchNorm1d(3 * n_local)
+
         self.fusion_mlp = nn.Sequential(
             nn.Conv1d(self.fusion_in_dim, self.fusion_out_dim, kernel_size=1),
             nn.GroupNorm(32, self.fusion_out_dim),
@@ -165,10 +171,30 @@ class STGCNCoSign1s(nn.Module):
 
             group_data = x[:, :, :, global_indices]  # [B, 3, T, V_local]
 
-            # first point in each group MUST be the root
-            root_point = group_data[:, :, :, 0].unsqueeze(-1)
+            # Confidence-aware centralization as in mmpose-trainingv2
+            # Only x, y are centralized; confidence (channel 2) is left untouched
+            root_point = group_data[:, :2, :, 0:1]  # [B, 2, T, 1]
+            centralized = group_data.clone()
             # centralization - eqn. (2)
-            centralized_groups[name] = group_data - root_point
+            centralized[:, :2] = group_data[:, :2] - root_point
+
+            # Zero low-confidence points AFTER centralization
+            # so missing points stay at (0, 0) instead of wandering to -root_point
+            low_conf_mask = (group_data[:, 2:3] < 0.2).expand(-1, 2, -1, -1)
+            centralized[:, :2] = torch.where(
+                low_conf_mask,
+                torch.zeros_like(centralized[:, :2]),
+                centralized[:, :2],
+            )
+
+            # Per-group BatchNorm on (C * V_local) features, pooled over (B, T)
+            # Input layout expected by BN1d: [B, C*V, T]
+            B, C, T_, V_ = centralized.shape
+            bn_in = centralized.permute(0, 1, 3, 2).reshape(B, C * V_, T_)
+            bn_out = self.data_bn[name](bn_in)
+            centralized = bn_out.reshape(B, C, V_, T_).permute(0, 1, 3, 2)
+
+            centralized_groups[name] = centralized
 
         features = []
 
@@ -184,24 +210,27 @@ class STGCNCoSign1s(nn.Module):
 
             # global average pooling over vertecies (dim=-1)
             # result [B, 64, T]
-            feat = feat.mean(dim=-1)
+            feat =             feat.mean(dim=-1)
             features.append(feat)
 
         v_groups = torch.stack(features, dim=1)
 
-        phi = torch.bernoulli(
+        # Chunk-based masking with τ=25 frames (matching CoSign paper as in mmpose-trainingv2)
+        t_B = v_groups.size(0)
+        t_N = v_groups.size(1)
+        t_T = v_groups.size(3)
+        tau = 25
+        num_chunks = int(np.ceil(t_T / tau))
+        chunk_mask = torch.bernoulli(
             torch.full(
-                (
-                    v_groups.size(0),
-                    v_groups.size(1),
-                    1,
-                    v_groups.size(3),
-                ),  # <-- Changed the last 1 to v_groups.size(3)
+                (t_B, t_N, 1, num_chunks),
                 fill_value=keep_prob,
                 device=v_groups.device,
                 dtype=v_groups.dtype,
             )
-        )  # [B, 5, 1, T]
+        )
+        expanded_mask = chunk_mask.repeat_interleave(tau, dim=-1)
+        phi = expanded_mask[..., :t_T]  # [B, 5, 1, T]
 
         phi_inv = 1.0 - phi
         v_masked = v_groups * phi  # [B, 5, 64, T]
@@ -235,5 +264,5 @@ class STGCNCoSign1s(nn.Module):
             graph_conv_type="graph_conv",
             gso=gso_matrix,
             enable_bias=True,
-            droprate=0.2,
+            droprate=0.3,  # Changed from 0.2 to 0.3 as in mmpose-trainingv2
         )
