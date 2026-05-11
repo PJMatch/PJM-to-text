@@ -24,8 +24,8 @@ data:
   test_dir: "pjm_dataset"
   annotation_dir: "annotations/pjm_json"
   train_ann: "annotations/PJM.train.txt"
-  dev_ann: "annotations/PJM.test.txt"
-  test_ann: "annotations/PJM.test.txt"
+  dev_ann: "annotations/PJM.dev.txt"
+  test_ann: "annotations/PJM.dev.txt"
   num_workers: 8
   pin_memory: true
 
