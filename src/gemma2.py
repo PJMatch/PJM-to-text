@@ -30,8 +30,6 @@ def main() -> None:
     Main function to load the quantized Bielik model and run 
     real-time PJM translation tests with performance tracking.
     """
-    print("Loading and quantizing the model into VRAM (this might take a moment)...")
-
     tokenizer = AutoTokenizer.from_pretrained(MODEL_ID)
 
     quantization_config = BitsAndBytesConfig(
