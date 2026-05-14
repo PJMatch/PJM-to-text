@@ -1,4 +1,4 @@
-"""Module for camera feed class."""
+"""Module for CameraLabel logic."""
 
 import cv2
 from PySide6.QtCore import Qt, QTimer
@@ -6,11 +6,11 @@ from PySide6.QtGui import QImage, QPixmap
 from PySide6.QtWidgets import QLabel
 
 
-class CameraFeed(QLabel):
-    """Camera feed class."""
+class CameraLabel(QLabel):
+    """Camera label class."""
 
     def __init__(self, parent=None):
-        """Init func for camera feed class."""
+        """Init func for CameraLabel class."""
         super().__init__()
         self.setAlignment(Qt.AlignCenter)
         self.setStyleSheet("background-color: #111; color: #fff; font-size: 18px;")
@@ -24,6 +24,7 @@ class CameraFeed(QLabel):
         self.camera = cv2.VideoCapture(0)
 
     def update_frame(self):
+        """Update displayed frame."""
         ret, frame = self.camera.read()
 
         if not ret:
