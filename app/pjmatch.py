@@ -1,3 +1,5 @@
+"""Main PJMatch user desktop application."""
+
 import sys
 
 from camera_feed import CameraFeed
