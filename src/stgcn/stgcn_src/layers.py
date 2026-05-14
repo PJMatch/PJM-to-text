@@ -123,21 +123,22 @@ class TemporalConvLayer(nn.Module):
         self.c_out = c_out
         self.n_vertex = n_vertex
         self.align = Align(c_in, c_out)
+
+        # Use symmetric temporal convolution (sees past+future) as in mmpose-trainingv2
+        pad_t = (Kt - 1) // 2
         if act_func == "glu" or act_func == "gtu":
-            self.causal_conv = CausalConv2d(
+            self.temporal_conv = nn.Conv2d(
                 in_channels=c_in,
                 out_channels=2 * c_out,
                 kernel_size=(Kt, 1),
-                enable_padding=True,
-                dilation=1,
+                padding=(pad_t, 0),
             )
         else:
-            self.causal_conv = CausalConv2d(
+            self.temporal_conv = nn.Conv2d(
                 in_channels=c_in,
                 out_channels=c_out,
                 kernel_size=(Kt, 1),
-                enable_padding=True,
-                dilation=1,
+                padding=(pad_t, 0),
             )
         self.relu = nn.ReLU()
         self.silu = nn.SiLU()
@@ -145,11 +146,11 @@ class TemporalConvLayer(nn.Module):
 
     def forward(self, x):
         x_in = self.align(x)
-        x_causal_conv = self.causal_conv(x)
+        x_tconv = self.temporal_conv(x)
 
         if self.act_func == "glu" or self.act_func == "gtu":
-            x_p = x_causal_conv[:, : self.c_out, :, :]
-            x_q = x_causal_conv[:, -self.c_out :, :, :]
+            x_p = x_tconv[:, : self.c_out, :, :]
+            x_q = x_tconv[:, -self.c_out :, :, :]
 
             if self.act_func == "glu":
                 # Explanation of Gated Linear Units (GLU):
@@ -168,10 +169,10 @@ class TemporalConvLayer(nn.Module):
                 x = torch.mul(torch.tanh(x_p + x_in), torch.sigmoid(x_q))
 
         elif self.act_func == "relu":
-            x = self.relu(x_causal_conv + x_in)
+            x = self.relu(x_tconv + x_in)
 
         elif self.act_func == "silu":
-            x = self.silu(x_causal_conv + x_in)
+            x = self.silu(x_tconv + x_in)
 
         else:
             raise NotImplementedError(
