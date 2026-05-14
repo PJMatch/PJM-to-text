@@ -16,7 +16,7 @@
   <widget class="QWidget" name="centralwidget">
    <layout class="QHBoxLayout" name="horizontalLayout" stretch="3,1">
     <item>
-     <widget class="CameraFeed" name="cameraLabel">
+     <widget class="CameraLabel" name="cameraLabel">
       <property name="minimumSize">
        <size>
         <width>450</width>
@@ -57,14 +57,14 @@
  </widget>
  <customwidgets>
   <customwidget>
-   <class>CameraFeed</class>
-   <extends>QLabel</extends>
-   <header>camera_feed</header>
-  </customwidget>
-  <customwidget>
    <class>OutputBox</class>
    <extends>QTextEdit</extends>
    <header>output_box</header>
+  </customwidget>
+  <customwidget>
+   <class>CameraLabel</class>
+   <extends>QLabel</extends>
+   <header>camera_label</header>
   </customwidget>
  </customwidgets>
  <resources/>
