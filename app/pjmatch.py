@@ -2,7 +2,7 @@
 
 import sys
 
-from camera_feed import CameraFeed
+from camera_label import CameraLabel
 from output_box import OutputBox
 from PySide6.QtCore import QFile
 from PySide6.QtUiTools import QUiLoader
@@ -21,7 +21,7 @@ class PJMatchWindow(QMainWindow):
         """Init function for PJMatchWindow."""
         super().__init__()
         loader = QUiLoader()
-        loader.registerCustomWidget(CameraFeed)
+        loader.registerCustomWidget(CameraLabel)
         loader.registerCustomWidget(OutputBox)
 
         ui_file = QFile(UI_FILE)
