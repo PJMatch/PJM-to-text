@@ -1,1 +1,43 @@
-print("hello world")
+"""Main PJMatch user desktop application."""
+
+import sys
+
+from camera_feed import CameraFeed
+from output_box import OutputBox
+from PySide6.QtCore import QFile
+from PySide6.QtUiTools import QUiLoader
+from PySide6.QtWidgets import (
+    QApplication,
+    QMainWindow,
+)
+
+UI_FILE = "res/ui/main_window.ui"
+
+
+class PJMatchWindow(QMainWindow):
+    """PJMatch app main window."""
+
+    def __init__(self):
+        """Init function for PJMatchWindow."""
+        super().__init__()
+        loader = QUiLoader()
+        loader.registerCustomWidget(CameraFeed)
+        loader.registerCustomWidget(OutputBox)
+
+        ui_file = QFile(UI_FILE)
+        if not ui_file.open(QFile.ReadOnly):
+            print(f"Cannot open {ui_file}: {ui_file.errorString()}")
+
+        self.ui = loader.load(ui_file, self)
+        ui_file.close()
+
+        self.setCentralWidget(self.ui.centralwidget)
+        self.resize(1000, 600)
+        self.setWindowTitle("PJMatch")
+
+
+if __name__ == "__main__":
+    app = QApplication(sys.argv)
+    window = PJMatchWindow()
+    window.show()
+    sys.exit(app.exec())
