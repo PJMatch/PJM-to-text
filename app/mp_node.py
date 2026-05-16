@@ -1,7 +1,9 @@
 """Module containing MediaPipe inference node logic."""
 
 import time
+from collections import deque
 from concurrent.futures import ThreadPoolExecutor
+from dataclasses import dataclass, field
 from pathlib import Path
 
 import cv2
@@ -9,23 +11,60 @@ import mediapipe as mp
 import numpy as np
 from mediapipe.tasks import python
 from mediapipe.tasks.python import vision
-from mediapipe.tasks.python.vision import drawing_styles, drawing_utils
 
 TASKS_DIR = Path("../mediapipe_tasks")
+SLIDING_WINDOW_LENGTH = 120  # in frames
+
+POSE_LEN = 33
+FACE_LEN = 478
+LH_LEN = 21
+RH_LEN = 21
+TOTAL_V = POSE_LEN + FACE_LEN + LH_LEN + RH_LEN
 
 
-# TODO: get these functions from the mediapipe_test module
+def _safe_part(raw, expected_len):
+    arr = np.array(raw, dtype=np.float32) if len(raw) > 0 else np.zeros((0, 4), dtype=np.float32)
+    arr = arr.reshape(-1, 4)
+    if arr.shape[0] == 0:
+        return np.zeros((expected_len, 4), dtype=np.float32)
+    if arr.shape[0] < expected_len:
+        arr = np.pad(arr, ((0, expected_len - arr.shape[0]), (0, 0)))
+    return arr[:expected_len]
 
 
-latest_face_result = None
-latest_pose_result = None
-latest_hand_result = None
+def format_frame_for_nn(frame_dict):
+    """Formats extracted raw keypoints for the nn."""
+    pose = _safe_part(frame_dict.get("pose", []), POSE_LEN)
+    face = _safe_part(frame_dict.get("face", []), FACE_LEN)
+    lh = _safe_part(frame_dict.get("lh", []), LH_LEN)
+    rh = _safe_part(frame_dict.get("rh", []), RH_LEN)
+
+    combined = np.concatenate([pose, face, lh, rh], axis=0)
+    # Output x, y, confidence (channels 0, 1, 3) instead of x, y, z (channels 0, 1, 2)
+    return combined[:, [0, 1, 3]]
+
+
+@dataclass
+class SlidingWindow:
+    """Dataclass holding the current window for MediaPipe inference."""
+
+    max_len: int = SLIDING_WINDOW_LENGTH
+    frames: deque = field(default_factory=lambda: deque(maxlen=SLIDING_WINDOW_LENGTH))
+
+    def append(self, frame) -> None:
+        """Appends the frames deque if not full, else appends and drops oldest frame."""
+        self.frames.append(frame)
+
+    def get_window(self):
+        """Returns the full window."""
+        return list(self.frames)
 
 
 class MPNode:
     """MediaPipe inference node class."""
 
     def __init__(self):
+        """Constructor of MPNode class."""
         face_model_path = TASKS_DIR / "face_landmarker_v2_with_blendshapes.task"
         face_base_options = python.BaseOptions(model_asset_path=str(face_model_path))
         face_options = vision.FaceLandmarkerOptions(
@@ -46,6 +85,8 @@ class MPNode:
         )
         self.pose_detector = vision.PoseLandmarker.create_from_options(pose_options)
 
+        self.extractor_thread = ThreadPoolExecutor(max_workers=3)
+
         hand_model_path = TASKS_DIR / "hand_landmarker.task"
         hand_base_options = python.BaseOptions(model_asset_path=str(hand_model_path))
         hand_options = vision.HandLandmarkerOptions(
@@ -53,13 +94,15 @@ class MPNode:
         )
         self.hand_detector = vision.HandLandmarker.create_from_options(hand_options)
 
+        self.sliding_window = SlidingWindow()
+
     def __del__(self):
         """Destructor of MPNode class."""
         self.face_detector.close()
         self.pose_detector.close()
         self.hand_detector.close()
 
-    def extract_raw_keypoints(pose_result, hand_result, face_result):
+    def extract_raw_keypoints(self, pose_result, hand_result, face_result):
         """Extracts visible landmarks into a structured dictionary without zero-padding.
 
         Confidence score is extracted from pose visibility.
@@ -108,8 +151,6 @@ class MPNode:
         Returns:
             dict: {"face_result", "pose_result", "hand_result"}
         """
-        feature_extractor_thread = ThreadPoolExecutor(max_workers=3)
-
         last_timestamp_ms = int(time.time() * 1000)
 
         # small_frame = cv2.resize(frame, (640, 480))
@@ -123,13 +164,13 @@ class MPNode:
             timestamp_ms = last_timestamp_ms + 1
         last_timestamp_ms = timestamp_ms
 
-        future_face = feature_extractor_thread.submit(
+        future_face = self.extractor_thread.submit(
             self.face_detector.detect_for_video, mp_image, timestamp_ms
         )
-        future_pose = feature_extractor_thread.submit(
+        future_pose = self.extractor_thread.submit(
             self.pose_detector.detect_for_video, mp_image, timestamp_ms
         )
-        future_hands = feature_extractor_thread.submit(
+        future_hands = self.extractor_thread.submit(
             self.hand_detector.detect_for_video, mp_image, timestamp_ms
         )
 
@@ -144,14 +185,19 @@ class MPNode:
         }
 
     def get_keypoints_from_frame(self, frame):
-        """Returns a numpy array with all keypoints - ready for PJM nn inference."""
+        """Returns a numpy array with all keypoints."""
         inf_res = self.run_mp_inference(frame)
         raw_keypoints = self.extract_raw_keypoints(
             inf_res["pose_result"], inf_res["hand_result"], inf_res["face_result"]
         )
         return raw_keypoints
 
+    def receive_frame(self, frame):
+        """Receives a singular frame, runs inference and adds it to the sliding window."""
+        raw_keypoints = self.get_keypoints_from_frame(frame)
+        nn_ready_frame = format_frame_for_nn(raw_keypoints)
+        self.sliding_window.append(nn_ready_frame)
+
 
 if __name__ == "__main__":
     mp_node = MPNode()
-    mp_node.synchronous_detect()
