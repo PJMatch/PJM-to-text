@@ -8,12 +8,64 @@ import numpy as np
 import torch
 import yaml
 
-from pjm_dataloader import build_gloss_vocab as build_pjm_vocab
-
 src_path = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "src"))
 if src_path not in sys.path:
     sys.path.append(src_path)
 from model import CoSign1SModel  # noqa: E402
+from pjm_dataloader import build_gloss_vocab as build_pjm_vocab  # noqa: E402
+
+
+class SentenceSmoother:
+    def __init__(self, similarity_threshold=0.3):
+        self.similarity_threshold = similarity_threshold
+        self.current_cluster = []
+        self.last_emitted_sentence = ""
+
+    def process(self, raw_text):
+        """Takes the raw output from the NN every 15 frames.
+
+        Returns a clean sentence only when the user finishes a thought,
+        otherwise returns None.
+        """
+        if not raw_text or raw_text == "none" or len(raw_text.split()) < 2:
+            return self._commit()
+
+        words = raw_text.split()
+
+        if not self.current_cluster:
+            self.current_cluster.append(words)
+            return None
+
+        last_words = self.current_cluster[-1]
+
+        intersection = len(set(words) & set(last_words))
+        union = len(set(words) | set(last_words))
+        similarity = intersection / union if union > 0 else 0
+
+        if similarity > self.similarity_threshold:
+            self.current_cluster.append(words)
+            return None
+
+        else:
+            clean_sentence = self._commit()
+            self.current_cluster.append(words)
+            return clean_sentence
+
+    def _commit(self):
+        """Finds the longest sentence in the cluster and returns it."""
+        if not self.current_cluster:
+            return None
+
+        best_words = max(self.current_cluster, key=len)
+        final_sentence = " ".join(best_words)
+
+        self.current_cluster = []
+
+        if final_sentence != self.last_emitted_sentence:
+            self.last_emitted_sentence = final_sentence
+            return final_sentence
+
+        return None
 
 
 class PJMPredictor:

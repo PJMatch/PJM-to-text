@@ -3,6 +3,7 @@
 import queue
 import sys
 
+import consts
 from camera_label import CameraLabel
 from output_box import OutputBox
 from PySide6.QtCore import QFile
@@ -12,8 +13,6 @@ from PySide6.QtWidgets import (
     QMainWindow,
 )
 from workers import AIWorker, VisionWorker
-
-UI_FILE = "res/ui/main_window.ui"
 
 
 class PJMatchWindow(QMainWindow):
@@ -26,7 +25,7 @@ class PJMatchWindow(QMainWindow):
         loader.registerCustomWidget(CameraLabel)
         loader.registerCustomWidget(OutputBox)
 
-        ui_file = QFile(UI_FILE)
+        ui_file = QFile(consts.UI_FILE)
         if not ui_file.open(QFile.ReadOnly):
             print(f"Cannot open {ui_file}: {ui_file.errorString()}")
 
@@ -35,11 +34,15 @@ class PJMatchWindow(QMainWindow):
 
         self.ai_queue = queue.Queue(maxsize=5)
 
-        self.vision_worker = VisionWorker(self.ai_queue)
+        self.vision_worker = VisionWorker(
+            shared_queue=self.ai_queue,
+            testing_vid_path=consts.TESTING_VIDEO_PATH,
+            window_width=consts.SLIDING_WINDOW_LENGTH,
+        )
         self.vision_worker.frame_ready.connect(self.ui.cameraLabel.update_frame)
         self.vision_worker.start()
 
-        self.ai_worker = AIWorker(self.ai_queue)
+        self.ai_worker = AIWorker(shared_queue=self.ai_queue)
         self.ai_worker.prediction_ready.connect(self.ui.sentenceHolder.append)
         self.ai_worker.start()
 

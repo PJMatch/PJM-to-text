@@ -6,20 +6,12 @@ from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass, field
 from pathlib import Path
 
+import consts
 import cv2
 import mediapipe as mp
 import numpy as np
 from mediapipe.tasks import python
 from mediapipe.tasks.python import vision
-
-TASKS_DIR = Path("../mediapipe_tasks")
-SLIDING_WINDOW_LENGTH = 120  # in frames
-
-POSE_LEN = 33
-FACE_LEN = 478
-LH_LEN = 21
-RH_LEN = 21
-TOTAL_V = POSE_LEN + FACE_LEN + LH_LEN + RH_LEN
 
 
 def _safe_part(raw, expected_len):
@@ -34,10 +26,10 @@ def _safe_part(raw, expected_len):
 
 def format_frame_for_nn(frame_dict):
     """Formats extracted raw keypoints for the nn."""
-    pose = _safe_part(frame_dict.get("pose", []), POSE_LEN)
-    face = _safe_part(frame_dict.get("face", []), FACE_LEN)
-    lh = _safe_part(frame_dict.get("lh", []), LH_LEN)
-    rh = _safe_part(frame_dict.get("rh", []), RH_LEN)
+    pose = _safe_part(frame_dict.get("pose", []), consts.POSE_LEN)
+    face = _safe_part(frame_dict.get("face", []), consts.FACE_LEN)
+    lh = _safe_part(frame_dict.get("lh", []), consts.LH_LEN)
+    rh = _safe_part(frame_dict.get("rh", []), consts.RH_LEN)
 
     combined = np.concatenate([pose, face, lh, rh], axis=0)
     # Output x, y, confidence (channels 0, 1, 3) instead of x, y, z (channels 0, 1, 2)
@@ -48,8 +40,8 @@ def format_frame_for_nn(frame_dict):
 class SlidingWindow:
     """Dataclass holding the current window for MediaPipe inference."""
 
-    max_len: int = SLIDING_WINDOW_LENGTH
-    frames: deque = field(default_factory=lambda: deque(maxlen=SLIDING_WINDOW_LENGTH))
+    max_len: int = consts.SLIDING_WINDOW_LENGTH
+    frames: deque = field(default_factory=lambda: deque(maxlen=consts.SLIDING_WINDOW_LENGTH))
 
     def append(self, frame) -> None:
         """Appends the frames deque if not full, else appends and drops oldest frame."""
@@ -65,7 +57,7 @@ class MPNode:
 
     def __init__(self):
         """Constructor of MPNode class."""
-        face_model_path = TASKS_DIR / "face_landmarker_v2_with_blendshapes.task"
+        face_model_path = consts.TASKS_DIR / "face_landmarker_v2_with_blendshapes.task"
         face_base_options = python.BaseOptions(model_asset_path=str(face_model_path))
         face_options = vision.FaceLandmarkerOptions(
             base_options=face_base_options,
@@ -76,7 +68,7 @@ class MPNode:
         )
         self.face_detector = vision.FaceLandmarker.create_from_options(face_options)
 
-        pose_model_path = TASKS_DIR / "pose_landmarker_lite.task"
+        pose_model_path = consts.TASKS_DIR / "pose_landmarker_lite.task"
         pose_base_options = python.BaseOptions(model_asset_path=str(pose_model_path))
         pose_options = vision.PoseLandmarkerOptions(
             base_options=pose_base_options,
@@ -87,7 +79,7 @@ class MPNode:
 
         self.extractor_thread = ThreadPoolExecutor(max_workers=3)
 
-        hand_model_path = TASKS_DIR / "hand_landmarker.task"
+        hand_model_path = consts.TASKS_DIR / "hand_landmarker.task"
         hand_base_options = python.BaseOptions(model_asset_path=str(hand_model_path))
         hand_options = vision.HandLandmarkerOptions(
             base_options=hand_base_options, running_mode=vision.RunningMode.VIDEO, num_hands=2
