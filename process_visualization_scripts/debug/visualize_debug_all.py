@@ -20,6 +20,24 @@ HAND_CONNECTIONS = [
     (0, 17)                                
 ]
 
+# NEW: Face contour connections for clear visualization
+FACE_CONNECTIONS = [
+    # Face oval
+    (10, 338), (338, 297), (297, 332), (332, 284), (284, 251), (251, 389), (389, 356), (356, 454), 
+    (454, 323), (323, 361), (361, 288), (288, 397), (397, 365), (365, 379), (379, 378), (378, 400), 
+    (400, 377), (377, 152), (152, 148), (148, 176), (176, 149), (149, 150), (150, 136), (136, 172), 
+    (172, 58), (58, 132), (132, 93), (93, 234), (234, 127), (127, 162), (162, 21), (21, 54), 
+    (54, 103), (103, 67), (67, 109), (109, 10),
+    # Lips outer
+    (61, 146), (146, 91), (91, 181), (181, 84), (84, 17), (17, 314), (314, 405), (405, 321), 
+    (321, 375), (375, 291), (291, 409), (409, 270), (270, 269), (269, 267), (267, 0), (0, 37), 
+    (37, 39), (39, 40), (40, 61),
+    # Left Eye
+    (33, 160), (160, 158), (158, 133), (133, 153), (153, 144), (144, 33),
+    # Right Eye
+    (362, 385), (385, 387), (387, 263), (263, 373), (373, 380), (380, 362)
+]
+
 def draw_skeleton(ax, frame_data, title, is_anchored=False):
     ax.clear()
     ax.set_title(title)
@@ -34,16 +52,19 @@ def draw_skeleton(ax, frame_data, title, is_anchored=False):
     
     ax.set_aspect('equal')
 
-    def plot_group(coords, connections, color):
+    def plot_group(coords, connections, color, point_size=2):
         if not coords: return
         pts = np.array(coords)
         # Draw lines
         for u, v in connections:
             if u < len(pts) and v < len(pts):
                 ax.plot([pts[u, 0], pts[v, 0]], [pts[u, 1], pts[v, 1]], color=color, linewidth=1)
-        ax.scatter(pts[:, 0], pts[:, 1], color=color, s=2)
+        # Draw dots
+        ax.scatter(pts[:, 0], pts[:, 1], color=color, s=point_size)
 
+    # Plot groups with different colors
     plot_group(frame_data.get('pose', []), POSE_CONNECTIONS, 'blue')
+    plot_group(frame_data.get('face', []), FACE_CONNECTIONS, 'cyan', point_size=0.5)
     plot_group(frame_data.get('lh', []), HAND_CONNECTIONS, 'red')
     plot_group(frame_data.get('rh', []), HAND_CONNECTIONS, 'green')
 
@@ -56,9 +77,9 @@ def visualize_checkpoints():
     num_frames = min(len(raw_skeletons), latent_features.shape[1])
 
     fig = plt.figure(figsize=(18, 6))
-    ax1 = fig.add_subplot(131) # Raw Skeleton
-    ax2 = fig.add_subplot(132) # Anchored Skeleton
-    ax3 = fig.add_subplot(133) # Latent Heatmap
+    ax1 = fig.add_subplot(131)
+    ax2 = fig.add_subplot(132)
+    ax3 = fig.add_subplot(133)
 
     heatmap = ax3.imshow(latent_features, aspect='auto', cmap='viridis', interpolation='nearest')
     ax3.set_title("Checkpoint 3: Latent Features (1024 dim)")

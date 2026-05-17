@@ -79,7 +79,8 @@ def _convert_pjm_frame(frame_dict):
     rh = _safe_part(frame_dict.get("rh", []), RH_LEN)
 
     combined = np.concatenate([pose, face, lh, rh], axis=0)
-    return combined[:, :3]
+    # Output x, y, confidence (channels 0, 1, 3) instead of x, y, z (channels 0, 1, 2)
+    return combined[:, [0, 1, 3]]
 
 
 def _load_pjm_sequence(file_path):

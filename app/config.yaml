@@ -22,6 +22,7 @@ data:
   annotation_dir: "annotations/pjm_json"
   train_ann: "annotations/PJM.train.txt"
   dev_ann: "annotations/PJM.dev.txt"
+  test_ann: "annotations/PJM.test.txt"
   num_workers: 8
   pin_memory: true
 
@@ -30,7 +31,7 @@ optimizer:
   gamma: 0.1
 
 system:
-  checkpoint_dir: "checkpoints"
+  checkpoint_dir: "../src/checkpoints"
   device: "auto"
 
 logging:
