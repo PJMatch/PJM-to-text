@@ -3,7 +3,7 @@
 from pathlib import Path
 
 TASKS_DIR = Path("../mediapipe_tasks")
-SLIDING_WINDOW_LENGTH = 200  # in frames
+SLIDING_WINDOW_LENGTH = 220  # in frames
 STRIDE = 15
 
 POSE_LEN = 33
@@ -13,4 +13,4 @@ RH_LEN = 21
 TOTAL_V = POSE_LEN + FACE_LEN + LH_LEN + RH_LEN
 
 UI_FILE = "res/ui/main_window.ui"
-TESTING_VIDEO_PATH = "/home/piotrek/all/pjmatch/testing_vids/output_combined.mp4"
+TESTING_VIDEO_PATH = r"local"

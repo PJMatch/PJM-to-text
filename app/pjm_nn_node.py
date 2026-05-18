@@ -16,21 +16,35 @@ from pjm_dataloader import build_gloss_vocab as build_pjm_vocab  # noqa: E402
 
 
 class SentenceSmoother:
-    def __init__(self, similarity_threshold=0.3):
+    """Smoother logic for parsing raw NN output into human-readable sentences."""
+    
+    def __init__(self, similarity_threshold=0.5, patience=3):
         self.similarity_threshold = similarity_threshold
+        self.patience = patience
         self.current_cluster = []
         self.last_emitted_sentence = ""
+        self.none_counter = 0
 
     def process(self, raw_text):
-        """Takes the raw output from the NN every 15 frames.
+        """Takes the raw output from the NN every stride frames.
 
-        Returns a clean sentence only when the user finishes a thought,
+        Returns a clean sentence only when the user finishes a thought (silence detected),
         otherwise returns None.
         """
-        if not raw_text or raw_text == "none" or len(raw_text.split()) < 2:
-            return self._commit()
+        text_lower = str(raw_text).strip().lower()
+
+        if not text_lower or text_lower == "none":
+            self.none_counter += 1
+            if self.none_counter >= self.patience:
+                return self._commit()
+            return None
+
+        self.none_counter = 0
 
         words = raw_text.split()
+        if not self.current_cluster and len(words) < 2:
+            self.current_cluster.append(words)
+            return None
 
         if not self.current_cluster:
             self.current_cluster.append(words)
@@ -42,10 +56,9 @@ class SentenceSmoother:
         union = len(set(words) | set(last_words))
         similarity = intersection / union if union > 0 else 0
 
-        if similarity > self.similarity_threshold:
+        if similarity > self.similarity_threshold or set(last_words).issubset(set(words)):
             self.current_cluster.append(words)
             return None
-
         else:
             clean_sentence = self._commit()
             self.current_cluster.append(words)
@@ -60,6 +73,7 @@ class SentenceSmoother:
         final_sentence = " ".join(best_words)
 
         self.current_cluster = []
+        self.none_counter = 0
 
         if final_sentence != self.last_emitted_sentence:
             self.last_emitted_sentence = final_sentence
@@ -111,7 +125,6 @@ class PJMPredictor:
 
         Takes a single sliding window of landmarks and returns the predicted sentence.
         Expected window_chunk shape: (T, V, C)
-        T = Time (frames), V = Vertices, C = Channels (x, y, z)
         """
         window_chunk = np.array(window_chunk)
         frames_tensor = torch.tensor(window_chunk, dtype=torch.float32).unsqueeze(0).to(self.device)
@@ -126,16 +139,23 @@ class PJMPredictor:
             logits = outputs["phi"]["main_logits"]
             logit_lengths = outputs["phi"]["logit_lengths"].cpu()
 
-        predicted_text = self._greedy_decode_single(logits[0], logit_lengths[0].item())
+        predicted_text = self._greedy_decode_single(logits[0], logit_lengths[0].item(), threshold=0.6)
 
         return predicted_text
 
-    def _greedy_decode_single(self, sequence_logits, length, blank=0):
-        """Standard CTC greedy decoding for a single sequence.
-
-        Sequence_logits shape: (T, num_classes)
+    def _greedy_decode_single(self, sequence_logits, length, blank=0, threshold=0.6):
+        """Standard CTC greedy decoding for a single sequence with Logit Thresholding.
+        
+        If the model's confidence for the predicted class is below the threshold,
+        it forces the output to be 'blank' (silence/none).
         """
-        preds = torch.argmax(sequence_logits[:length], dim=-1)
+        valid_logits = sequence_logits[:length]
+        
+        probs = torch.softmax(valid_logits, dim=-1)
+        
+        max_probs, preds = torch.max(probs, dim=-1)
+        
+        preds[max_probs < threshold] = blank
 
         hyp = []
         prev_token = -1
