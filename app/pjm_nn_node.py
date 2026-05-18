@@ -6,6 +6,7 @@ from pathlib import Path
 
 import numpy as np
 import torch
+import torch.nn.functional as F
 import yaml
 
 src_path = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "src"))
@@ -13,6 +14,9 @@ if src_path not in sys.path:
     sys.path.append(src_path)
 from model import CoSign1SModel  # noqa: E402
 from pjm_dataloader import build_gloss_vocab as build_pjm_vocab  # noqa: E402
+
+#TODO: tweak this value
+CONFIDENCE_THRESHOLD = 0.5
 
 
 class SentenceSmoother:
@@ -131,20 +135,29 @@ class PJMPredictor:
         return predicted_text
 
     def _greedy_decode_single(self, sequence_logits, length, blank=0):
-        """Standard CTC greedy decoding for a single sequence.
-
+        """CTC greedy decoding with per-gloss confidence filtering.
         Sequence_logits shape: (T, num_classes)
+        Glosses whose average softmax confidence is below CONFIDENCE_THRESHOLD
+        are silently dropped from the output.
         """
-        preds = torch.argmax(sequence_logits[:length], dim=-1)
+        logits = sequence_logits[:length]
+        probs = F.softmax(logits, dim=-1)
+        max_probs, argmax = probs.max(dim=-1)
 
-        hyp = []
-        prev_token = -1
+        result = []  # list of gloss_id,confidences
+        prev = blank
+        for t in range(len(argmax)):
+            token = argmax[t].item()
+            if token != blank and token != prev:
+                result.append((token, [max_probs[t].item()]))
+            elif token != blank and token == prev:
+                result[-1][1].append(max_probs[t].item())
+            prev = token
 
-        for token_tensor in preds:
-            token = token_tensor.item()
-            if token != blank and token != prev_token:
-                hyp.append(token)
-            prev_token = token
+        hyp_words = []
+        for gloss_id, scores in result:
+            avg_conf = sum(scores) / len(scores)
+            if avg_conf >= CONFIDENCE_THRESHOLD:
+                hyp_words.append(self.id2gloss.get(gloss_id, "<unk>"))
 
-        hyp_words = [self.id2gloss.get(v, "<unk>") for v in hyp]
         return " ".join(hyp_words)
