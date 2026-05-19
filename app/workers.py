@@ -6,7 +6,7 @@ import time
 import consts
 import cv2
 from mp_node import MPNode
-from pjm_nn_node import PJMPredictor, GlossTracker, SentenceSmoother
+from pjm_nn_node import GlossTracker, PJMPredictor, SentenceSmoother
 from PySide6.QtCore import QThread, Signal
 
 
@@ -49,9 +49,10 @@ class VisionWorker(QThread):
         self.absolute_frame = 0
 
     def run(self):
-        """Runs VisionWorker
+        """Runs VisionWorker.
+
         Reads frames, sends them to be displayed, has the MediaPipe node do the inference every
-        stride,
+        stride.
         """
         self.playback_start_time = time.time()
         while self.running:
@@ -109,7 +110,6 @@ class AIWorker(QThread):
     prediction_ready = Signal(str)
 
     def __init__(self, shared_queue):
-        """Constructor of the AIWorker."""
         super().__init__()
         self.running = True
         self.shared_queue = shared_queue
@@ -119,7 +119,6 @@ class AIWorker(QThread):
         self.smoother = SentenceSmoother()
 
     def run(self):
-        """Runs the AIWorker QThread."""
         while self.running:
             try:
                 window_chunk, window_start = self.shared_queue.get(timeout=1)
@@ -128,27 +127,22 @@ class AIWorker(QThread):
 
             gloss_predictions = self.predictor.predict(window_chunk, window_start)
 
-            if gloss_predictions:
-                self.tracker.vote(gloss_predictions)
-            else:
-                tracker_output = self.tracker.notify_silence()
-                if tracker_output:
-                    self._emit(tracker_output)
+            voted_string = self.tracker.vote(gloss_predictions)
 
-            debug_str = self.tracker._resolve_debug()
-            if debug_str:
-                print(debug_str)
-                self.prediction_ready.emit(debug_str)
+            if voted_string:
+                print(f"DEBUG Tracker: {voted_string}")
 
-    def _emit(self, tracker_output: str):
-        """Feed tracker output through the sentence smoother and emit to UI."""
-        clean_sentence = self.smoother.process(tracker_output)
-        if clean_sentence:
-            print(clean_sentence)
-            self.prediction_ready.emit(clean_sentence)
+                final_sentence = self.smoother.process(voted_string)
+
+                if final_sentence:
+                    print(f"\n--- EMITTING TO UI: {final_sentence} ---\n")
+                    self.prediction_ready.emit(final_sentence)
 
     def stop(self):
-        """Stops the thread."""
+        leftover = self.smoother._commit()
+        if leftover:
+            self.prediction_ready.emit(leftover)
+
         self.running = False
         self.quit()
         self.wait()
