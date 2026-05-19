@@ -3,7 +3,6 @@
 import os
 import sys
 from dataclasses import dataclass
-from pathlib import Path
 
 import numpy as np
 import torch
@@ -16,7 +15,6 @@ src_path = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "src"))
 if src_path not in sys.path:
     sys.path.append(src_path)
 from model import CoSign1SModel
-from pjm_dataloader import build_gloss_vocab as build_pjm_vocab
 
 
 @dataclass
@@ -181,22 +179,17 @@ class PJMPredictor:
             else "cpu"
         )
 
-        src_path = Path(__file__).parent.resolve() / "../src"
-
-        annotation_dir = src_path / self.config["data"]["annotation_dir"]
-        train_ann = src_path / self.config["data"]["train_ann"]
-        test_ann = src_path / self.config["data"]["test_ann"]
-
-        self.gloss2id, self.id2gloss = build_pjm_vocab(annotation_dir, [train_ann, test_ann])
-        num_classes = len(self.gloss2id)
-
-        self.model = CoSign1SModel(num_classes=num_classes, dropout=0.0)
-
         ckpt_path = os.path.join(self.config["system"]["checkpoint_dir"], "best_model.pth")
         if not os.path.exists(ckpt_path):
             raise FileNotFoundError(f"No checkpoint found at {ckpt_path}")
 
         checkpoint = torch.load(ckpt_path, map_location=self.device, weights_only=False)
+
+        self.gloss2id = checkpoint["gloss2id"]
+        self.id2gloss = {v: k for k, v in self.gloss2id.items()}
+        num_classes = len(self.gloss2id)
+
+        self.model = CoSign1SModel(num_classes=num_classes, dropout=0.0)
         self.model.load_state_dict(checkpoint["model_state_dict"])
         print(f"Loaded model weights from epoch {checkpoint.get('epoch', 'unknown')}")
 

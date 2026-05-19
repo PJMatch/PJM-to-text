@@ -16,13 +16,12 @@ model:
   dropout: 0.2
 
 data:
-  dataset: "pjm"  # "phoenix" or "pjm"
+  dataset: "pjm"
   train_dir: "pjm_dataset"
   dev_dir: "pjm_dataset"
   annotation_dir: "annotations/pjm_json"
   train_ann: "annotations/PJM.train.txt"
   dev_ann: "annotations/PJM.dev.txt"
-  test_ann: "annotations/PJM.test.txt"
   num_workers: 8
   pin_memory: true
 
