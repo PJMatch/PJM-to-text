@@ -5,6 +5,8 @@ from pathlib import Path
 TASKS_DIR = Path("../mediapipe_tasks")
 SLIDING_WINDOW_LENGTH = 220  # in frames
 STRIDE = 15
+DOWNSAMPLING_FACTOR = 4  # CNN does 2x MaxPool1d → 4x temporal reduction
+VOTE_THRESHOLD = 2  # gloss must appear in ≥ N overlapping windows
 
 POSE_LEN = 33
 FACE_LEN = 478

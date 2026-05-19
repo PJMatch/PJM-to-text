@@ -11,14 +11,4 @@ class OutputBox(QTextEdit):
         """Init function for OutputBox."""
         super().__init__()
 
-        self.log_counter = 0
-
-        self.timer = QTimer(self)
-        self.timer.timeout.connect(self.update_output)
-        self.timer.start(1000)
-
-    def update_output(self):
-        """Update displayed output."""
-        self.log_counter += 1
-        output_sentence = f"Log entry: {self.log_counter}. Logged successfuly"
-        self.setText(output_sentence)
+        self.setText("Waiting for predictions...")
