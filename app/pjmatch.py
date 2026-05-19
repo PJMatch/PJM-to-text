@@ -43,7 +43,7 @@ class PJMatchWindow(QMainWindow):
         self.vision_worker.start()
 
         self.ai_worker = AIWorker(shared_queue=self.ai_queue)
-        self.ai_worker.prediction_ready.connect(self.ui.sentenceHolder.append)
+        self.ai_worker.prediction_ready.connect(self.ui.sentenceHolder.setText)
         self.ai_worker.start()
 
         self.setCentralWidget(self.ui.centralwidget)

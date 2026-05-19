@@ -2,22 +2,105 @@
 
 import os
 import sys
+from dataclasses import dataclass
 from pathlib import Path
 
 import numpy as np
 import torch
+import torch.nn.functional as F
 import yaml
+
+import consts
 
 src_path = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "src"))
 if src_path not in sys.path:
     sys.path.append(src_path)
-from model import CoSign1SModel  # noqa: E402
-from pjm_dataloader import build_gloss_vocab as build_pjm_vocab  # noqa: E402
+from model import CoSign1SModel
+from pjm_dataloader import build_gloss_vocab as build_pjm_vocab
 
+
+@dataclass
+class GlossPrediction:
+    """A single decoded gloss with its confidence."""
+    name: str
+    confidence: float
+
+
+class GlossTracker:
+    """Accumulates gloss predictions across sliding windows and resolves
+    which glosses are real by checking name persistence across windows.
+    """
+
+    def __init__(self, patience=3, max_history=15):
+        self.patience = patience
+        self.max_history = max_history
+        self.predictions: list[list[GlossPrediction]] = []
+        self.silence_counter = 0
+        self.last_emitted_sentence = ""
+
+    def vote(self, batch: list[GlossPrediction]):
+        """Add a new window's gloss predictions to the tracker."""
+        if batch:
+            self.silence_counter = 0
+        self.predictions.append(batch)
+        if len(self.predictions) > self.max_history:
+            self.predictions = self.predictions[-self.max_history:]
+
+    def notify_silence(self) -> str | None:
+        """Called when the model outputs nothing. Returns a resolved sentence
+        if patience is exceeded, otherwise None."""
+        self.silence_counter += 1
+        if self.silence_counter >= self.patience:
+            return self._commit()
+        return None
+
+    def _commit(self) -> str | None:
+        """Resolve accumulated predictions into a final sentence."""
+        self.silence_counter = 0
+        result = self._resolve_debug()
+        self.predictions = []
+        if result and result != self.last_emitted_sentence:
+            self.last_emitted_sentence = result
+            return result
+        return None
+
+    # how many positions a gloss can shift between windows and still match.
+    POSITION_TOLERANCE = 0
+
+    def _resolve_debug(self) -> str | None:
+        """Resolve glosses by name + ordinal position voting across windows. """
+        if not self.predictions:
+            return None
+
+        ref_batch = self.predictions[-1]
+        if not ref_batch:
+            return None
+
+        tol = self.POSITION_TOLERANCE
+
+        output_parts = []
+        for ref_idx, ref_gloss in enumerate(ref_batch):
+            votes = 0
+            conf_sum = 0.0
+
+            for batch in self.predictions:
+                for cand_idx, cand_gloss in enumerate(batch):
+                    if cand_gloss.name == ref_gloss.name and abs(cand_idx - ref_idx) <= tol:
+                        votes += 1
+                        conf_sum += cand_gloss.confidence
+                        break
+
+            if votes < consts.VOTE_THRESHOLD:
+                continue
+
+            avg_conf = conf_sum / votes if votes > 0 else 0.0
+            output_parts.append(f"{ref_gloss.name}(votes={votes} conf={avg_conf:.2f})")
+
+        return " ".join(output_parts) if output_parts else None
 
 class SentenceSmoother:
     """Smoother logic for parsing raw NN output into human-readable sentences."""
-    
+
     def __init__(self, similarity_threshold=0.5, patience=3):
         self.similarity_threshold = similarity_threshold
         self.patience = patience
@@ -120,11 +203,16 @@ class PJMPredictor:
         self.model.to(self.device)
         self.model.eval()
 
-    def predict(self, window_chunk):
-        """Runs continuously.
+    def predict(self, window_chunk, window_start_frame=0) -> list[GlossPrediction]:
+        """Runs inference on a single sliding window.
 
-        Takes a single sliding window of landmarks and returns the predicted sentence.
-        Expected window_chunk shape: (T, V, C)
+        Args:
+            window_chunk: array of shape (T, V, C)
+            window_start_frame: absolute frame index (unused, kept for interface compat)
+
+        Returns:
+            list of GlossPrediction with confidence scores.
+            Empty list means silence / no glosses detected.
         """
         window_chunk = np.array(window_chunk)
         frames_tensor = torch.tensor(window_chunk, dtype=torch.float32).unsqueeze(0).to(self.device)
@@ -139,32 +227,40 @@ class PJMPredictor:
             logits = outputs["phi"]["main_logits"]
             logit_lengths = outputs["phi"]["logit_lengths"].cpu()
 
-        predicted_text = self._greedy_decode_single(logits[0], logit_lengths[0].item(), threshold=0.6)
+        raw = self._greedy_decode_single(logits[0], logit_lengths[0].item())
 
-        return predicted_text
+        predictions = []
+        for gloss_id, _, _, conf in raw:
+            name = self.id2gloss.get(gloss_id, "<unk>")
+            predictions.append(GlossPrediction(name=name, confidence=conf))
 
-    def _greedy_decode_single(self, sequence_logits, length, blank=0, threshold=0.6):
-        """Standard CTC greedy decoding for a single sequence with Logit Thresholding.
-        
-        If the model's confidence for the predicted class is below the threshold,
-        it forces the output to be 'blank' (silence/none).
+        return predictions
+
+    def _greedy_decode_single(self, sequence_logits, length, blank=0):
+        """CTC greedy decoding that tracks temporal positions.
+
+        Returns:
+            list of (gloss_id, logit_start, logit_end, avg_confidence) tuples.
+            logit_start/end are positions in the logit sequence (before upsampling).
         """
         valid_logits = sequence_logits[:length]
-        
-        probs = torch.softmax(valid_logits, dim=-1)
-        
+        probs = F.softmax(valid_logits, dim=-1)
         max_probs, preds = torch.max(probs, dim=-1)
-        
-        preds[max_probs < threshold] = blank
 
-        hyp = []
+        result = []  # list of gloss_id start_t end_t confidences
         prev_token = -1
 
-        for token_tensor in preds:
-            token = token_tensor.item()
+        for t in range(len(preds)):
+            token = preds[t].item()
             if token != blank and token != prev_token:
-                hyp.append(token)
+                result.append((token, t, t, [max_probs[t].item()]))
+            elif token != blank and token == prev_token:
+                _, start, _, scores = result[-1]
+                result[-1] = (token, start, t, scores + [max_probs[t].item()])
             prev_token = token
 
-        hyp_words = [self.id2gloss.get(v, "<unk>") for v in hyp]
-        return " ".join(hyp_words)
+        # Average confidence over the duration of each gloss
+        return [
+            (gloss_id, start, end, sum(scores) / len(scores))
+            for gloss_id, start, end, scores in result
+        ]
