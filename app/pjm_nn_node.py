@@ -1,15 +1,15 @@
 """Module for the PJM predictor."""
 
 import os
+import re
 import sys
 from dataclasses import dataclass
 
+import consts
 import numpy as np
 import torch
 import torch.nn.functional as F
 import yaml
-
-import consts
 
 src_path = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "src"))
 if src_path not in sys.path:
@@ -20,53 +20,33 @@ from model import CoSign1SModel
 @dataclass
 class GlossPrediction:
     """A single decoded gloss with its confidence."""
+
     name: str
     confidence: float
 
 
 class GlossTracker:
-    """Accumulates gloss predictions across sliding windows and resolves
-    which glosses are real by checking name persistence across windows.
-    """
+    """Accumulates gloss predictions across sliding windows to filter noise."""
 
-    def __init__(self, patience=3, max_history=15):
-        self.patience = patience
+    def __init__(self, max_history=15):
         self.max_history = max_history
         self.predictions: list[list[GlossPrediction]] = []
-        self.silence_counter = 0
-        self.last_emitted_sentence = ""
 
-    def vote(self, batch: list[GlossPrediction]):
-        """Add a new window's gloss predictions to the tracker."""
-        if batch:
-            self.silence_counter = 0
+    def vote(self, batch: list[GlossPrediction]) -> str | None:
+        """
+        Adds the batch to history and returns the currently highest-voted string.
+        """
+        if not batch:
+            return None
+
         self.predictions.append(batch)
         if len(self.predictions) > self.max_history:
-            self.predictions = self.predictions[-self.max_history:]
+            self.predictions = self.predictions[-self.max_history :]
 
-    def notify_silence(self) -> str | None:
-        """Called when the model outputs nothing. Returns a resolved sentence
-        if patience is exceeded, otherwise None."""
-        self.silence_counter += 1
-        if self.silence_counter >= self.patience:
-            return self._commit()
-        return None
+        return self._resolve_votes()
 
-    def _commit(self) -> str | None:
-        """Resolve accumulated predictions into a final sentence."""
-        self.silence_counter = 0
-        result = self._resolve_debug()
-        self.predictions = []
-        if result and result != self.last_emitted_sentence:
-            self.last_emitted_sentence = result
-            return result
-        return None
-
-    # how many positions a gloss can shift between windows and still match.
-    POSITION_TOLERANCE = 0
-
-    def _resolve_debug(self) -> str | None:
-        """Resolve glosses by name + ordinal position voting across windows. """
+    def _resolve_votes(self) -> str | None:
+        """Resolve glosses by name voting across windows."""
         if not self.predictions:
             return None
 
@@ -74,89 +54,82 @@ class GlossTracker:
         if not ref_batch:
             return None
 
-        tol = self.POSITION_TOLERANCE
-
         output_parts = []
-        for ref_idx, ref_gloss in enumerate(ref_batch):
+        for ref_gloss in ref_batch:
             votes = 0
             conf_sum = 0.0
 
             for batch in self.predictions:
-                for cand_idx, cand_gloss in enumerate(batch):
-                    if cand_gloss.name == ref_gloss.name and abs(cand_idx - ref_idx) <= tol:
-                        votes += 1
-                        conf_sum += cand_gloss.confidence
-                        break
+                match = next((g for g in batch if g.name == ref_gloss.name), None)
+                if match:
+                    votes += 1
+                    conf_sum += match.confidence
 
-            if votes < consts.VOTE_THRESHOLD:
-                continue
-
-            avg_conf = conf_sum / votes if votes > 0 else 0.0
-            output_parts.append(f"{ref_gloss.name}(votes={votes} conf={avg_conf:.2f})")
+            if votes >= consts.VOTE_THRESHOLD:
+                output_parts.append(ref_gloss.name)
 
         return " ".join(output_parts) if output_parts else None
+
 
 class SentenceSmoother:
     """Smoother logic for parsing raw NN output into human-readable sentences."""
 
-    def __init__(self, similarity_threshold=0.5, patience=3):
+    def __init__(self, similarity_threshold=0.2):
         self.similarity_threshold = similarity_threshold
-        self.patience = patience
         self.current_cluster = []
         self.last_emitted_sentence = ""
-        self.none_counter = 0
 
-    def process(self, raw_text):
-        """Takes the raw output from the NN every stride frames.
-
-        Returns a clean sentence only when the user finishes a thought (silence detected),
-        otherwise returns None.
+    def process(self, raw_text: str) -> str | None:
         """
-        text_lower = str(raw_text).strip().lower()
-
-        if not text_lower or text_lower == "none":
-            self.none_counter += 1
-            if self.none_counter >= self.patience:
-                return self._commit()
+        Detects when the user transitions to a new thought by measuring
+        similarity against the PEAK of the current thought.
+        """
+        if not raw_text:
             return None
 
-        self.none_counter = 0
+        clean_text = re.sub(r"\(votes=\d+ conf=[0-9.]+\)", "", raw_text).strip()
+        words = clean_text.split()
 
-        words = raw_text.split()
-        if not self.current_cluster and len(words) < 2:
-            self.current_cluster.append(words)
+        if not words:
             return None
 
         if not self.current_cluster:
             self.current_cluster.append(words)
             return None
 
-        last_words = self.current_cluster[-1]
+        peak_words = max(self.current_cluster, key=len)
 
-        intersection = len(set(words) & set(last_words))
-        union = len(set(words) | set(last_words))
+        intersection = len(set(words) & set(peak_words))
+        union = len(set(words) | set(peak_words))
         similarity = intersection / union if union > 0 else 0
 
-        if similarity > self.similarity_threshold or set(last_words).issubset(set(words)):
+        if similarity >= self.similarity_threshold or set(words).issubset(set(peak_words)):
             self.current_cluster.append(words)
             return None
+
         else:
             clean_sentence = self._commit()
             self.current_cluster.append(words)
             return clean_sentence
 
-    def _commit(self):
-        """Finds the longest sentence in the cluster and returns it."""
+    def _commit(self) -> str | None:
+        """Finds the longest sentence in the cluster and filters out noise."""
         if not self.current_cluster:
             return None
 
         best_words = max(self.current_cluster, key=len)
         final_sentence = " ".join(best_words)
+        cluster_duration = len(self.current_cluster)
 
         self.current_cluster = []
-        self.none_counter = 0
 
-        if final_sentence != self.last_emitted_sentence:
+        if len(best_words) < 2 and cluster_duration < 5:
+            return None
+
+        if cluster_duration < 3:
+            return None
+
+        if final_sentence and final_sentence != self.last_emitted_sentence:
             self.last_emitted_sentence = final_sentence
             return final_sentence
 
@@ -240,7 +213,7 @@ class PJMPredictor:
         probs = F.softmax(valid_logits, dim=-1)
         max_probs, preds = torch.max(probs, dim=-1)
 
-        result = []  # list of gloss_id start_t end_t confidences
+        result = []
         prev_token = -1
 
         for t in range(len(preds)):
@@ -252,7 +225,6 @@ class PJMPredictor:
                 result[-1] = (token, start, t, scores + [max_probs[t].item()])
             prev_token = token
 
-        # Average confidence over the duration of each gloss
         return [
             (gloss_id, start, end, sum(scores) / len(scores))
             for gloss_id, start, end, scores in result
