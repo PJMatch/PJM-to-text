@@ -9,8 +9,7 @@ from torch.utils.data import DataLoader
 from torchaudio.models.decoder import ctc_decoder
 
 from model import CoSign1SModel
-from phoenix_dataloader import PhoenixDataset, phoenix_ctc_collate_fn, build_gloss_vocab as build_phoenix_vocab
-from pjm_dataloader import PJMDataset, pjm_ctc_collate_fn, build_gloss_vocab as build_pjm_vocab
+from pjm_dataloader import PJMDataset, pjm_ctc_collate_fn
 
 
 def load_config(config_path="config.yaml"):
@@ -98,37 +97,29 @@ def main():
         else "cpu"
     )
 
-    print("Building vocabulary")
-    dataset_type = config.get("data", {}).get("dataset", "phoenix")
-
-    if dataset_type == "pjm":
-        annotation_dir = config["data"]["annotation_dir"]
-        gloss2id, id2gloss = build_pjm_vocab(annotation_dir, [config["data"]["train_ann"], config["data"]["dev_ann"], config["data"]["test_ann"]])
-        num_classes = len(gloss2id)
-
-        print("Loading PJM test dataset")
-        test_dataset = PJMDataset(
-            data_dir=config["data"]["test_dir"],
-            annotation_dir=annotation_dir,
-            split_file=config["data"]["test_ann"],
-            gloss2id=gloss2id,
-            split="test",
-            use_temporal_aug=False,
-        )
-        collate_fn = pjm_ctc_collate_fn
+    print("Loading checkpoint")
+    ckpt_path = os.path.join(config["system"]["checkpoint_dir"], "best_model.pth")
+    if os.path.exists(ckpt_path):
+        checkpoint = torch.load(ckpt_path, map_location=device, weights_only=False)
     else:
-        gloss2id, id2gloss = build_phoenix_vocab([config["data"]["train_ann"], config["data"]["dev_ann"]])
-        num_classes = len(gloss2id)
+        raise FileNotFoundError(f"No checkpoint found at {ckpt_path}")
 
-        print("Loading Phoenix test dataset")
-        test_dataset = PhoenixDataset(
-            data_dir=config["data"]["test_dir"],
-            annotation_file=config["data"]["test_ann"],
-            gloss2id=gloss2id,
-            split="test",
-            use_temporal_aug=False,
-        )
-        collate_fn = phoenix_ctc_collate_fn
+    gloss2id = checkpoint["gloss2id"]
+    id2gloss = {v: k for k, v in gloss2id.items()}
+    num_classes = len(gloss2id)
+    print(f"Loaded checkpoint from epoch {checkpoint['epoch']}, num_classes={num_classes}")
+
+    annotation_dir = config["data"]["annotation_dir"]
+    print("Loading PJM dev dataset")
+    test_dataset = PJMDataset(
+        data_dir=config["data"]["dev_dir"],
+        annotation_dir=annotation_dir,
+        split_file=config["data"]["dev_ann"],
+        gloss2id=gloss2id,
+        split="test",
+        use_temporal_aug=False,
+    )
+    collate_fn = pjm_ctc_collate_fn
 
     test_loader = DataLoader(
         test_dataset,
@@ -146,15 +137,7 @@ def main():
 
     print("Loading Model")
     model = CoSign1SModel(num_classes=num_classes, dropout=0.0)
-
-    ckpt_path = os.path.join(config["system"]["checkpoint_dir"], "best_model.pth")
-    if os.path.exists(ckpt_path):
-        checkpoint = torch.load(ckpt_path, map_location=device, weights_only=False)
-        model.load_state_dict(checkpoint["model_state_dict"])
-        print(f"Loaded checkpoint from epoch {checkpoint['epoch']}")
-    else:
-        raise FileNotFoundError(f"No checkpoint found at {ckpt_path}")
-
+    model.load_state_dict(checkpoint["model_state_dict"])
     model.to(device)
     model.eval()
 

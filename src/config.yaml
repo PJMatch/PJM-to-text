@@ -16,9 +16,9 @@ model:
   dropout: 0.2
 
 data:
-  dataset: "pjm"  # "phoenix" or "pjm"
-  train_dir: "pjm_dataset"
-  dev_dir: "pjm_dataset"
+  dataset: "pjm"
+  train_dir: "extracted"
+  dev_dir: "extracted"
   annotation_dir: "annotations/pjm_json"
   train_ann: "annotations/PJM.train.txt"
   dev_ann: "annotations/PJM.dev.txt"
