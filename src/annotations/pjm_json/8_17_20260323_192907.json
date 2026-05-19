@@ -1,11 +1,12 @@
 {
-    "recorded_correctly": true,
+    "recorded_correctly": false,
     "person_id": "8",
     "sentence_id": "17",
     "recording_date": "2026-03-23T19:29:07.320005",
     "sentence": "Ty lubisz uczyć się migać.",
     "glosses": [
-        "TY LUBISZ",
+        "TY",
+        "LUBISZ",
         "MIGAĆ",
         "UCZYĆ-SIĘ"
     ]
