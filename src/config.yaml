@@ -19,11 +19,13 @@ data:
   dataset: "pjm"
   train_dir: "extracted"
   dev_dir: "extracted"
-  annotation_dir: "annotations/pjm_json"
+  annotation_dir: "./ann_annotated_glosses"
   train_ann: "annotations/PJM.train.txt"
   dev_ann: "annotations/PJM.dev.txt"
   num_workers: 8
   pin_memory: true
+  min_sentences: 4 # inclusive min unique sentences for the gloss to appear in dev
+  train_ratio: 0.75 # if min_sentences condition is met, what is the procentage of train sentences out of the total pool of unique sentences. 
 
 optimizer:
   milestones: [20, 35]
