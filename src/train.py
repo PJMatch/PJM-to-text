@@ -129,7 +129,7 @@ def per_frame_accuracy(logits, labels):
 
 
 def collapse_predictions(logits, out_lengths):
-    """Argmax and collapse consecutive duplicates into gloss sequences."""
+    """Argmax and collapse consecutive duplicates into gloss sequences"""
     preds = logits.argmax(dim=-1)  #[B, T]
     sequences = []
     for b in range(preds.size(0)):
@@ -137,9 +137,11 @@ def collapse_predictions(logits, out_lengths):
         prev = -1
         for t in range(out_lengths[b].item()):
             token = preds[b, t].item()
-            if token != 0 and token != prev:
+            if token == 0:
+                continue
+            if token != prev:
                 seq.append(token)
-            prev = token
+                prev = token
         sequences.append(seq)
     return sequences
 
