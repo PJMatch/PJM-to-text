@@ -199,6 +199,65 @@ class CoSign1SModel(nn.Module):
         }
 
 
+class GlossClassifier(nn.Module):
+    """Perframe gloss classifier: ST-GCN backbone -> TemporalCNN -> BiLSTM -> Linear head."""
+
+    def __init__(self, num_classes, dropout=0.2, lstm_hidden=512, freeze_backbone=False):
+        super().__init__()
+
+        self.STGCN = STGCNCoSign1s()
+
+        self.temporal_cnn = CoSignTemporalCNN(
+            in_dim=1024,
+            hidden_dim=1024,
+            dropout=dropout,
+        )
+
+        self.context_lstm = LSTM(
+            input_dim=1024,
+            hidden_size=lstm_hidden,
+            num_layers=2,
+            dropout=dropout,
+        )
+
+        self.head = nn.Linear(2 * lstm_hidden, num_classes)
+
+        if freeze_backbone:
+            for p in self.STGCN.parameters():
+                p.requires_grad = False
+
+    def forward(self, x, lengths):
+        """x: [B, C, T, V]  lengths: [B]  Returns logits [B, T', V] and output lengths [B]."""
+        branches = self.STGCN(x, keep_prob=1.0)  #[B, 2, 1024, T]
+        feat = branches[:, 0, :, :]  #[B, 1024, T]
+
+        cnn_feat, out_lengths = self.temporal_cnn(feat, lengths)  #[B, 1024, T']
+
+        lstm_out = self.context_lstm(cnn_feat, out_lengths)  #[B, T', 1024]
+
+        logits = self.head(lstm_out)  #[B, T', V]
+
+        return logits, out_lengths
+
+    def load_pretrained(self, checkpoint_path, device):
+        """Load CoSign checkpoint, transferring STGCN/temporal/LSTM weights"""
+        ckpt = torch.load(checkpoint_path, map_location=device, weights_only=False)
+        state = ckpt["model_state_dict"]
+        own_state = self.state_dict()
+
+        loaded = 0
+        skipped = 0
+        for k, v in state.items():
+            if k in own_state and own_state[k].shape == v.shape:
+                own_state[k] = v
+                loaded += 1
+            else:
+                skipped += 1
+
+        self.load_state_dict(own_state)
+        print(f"Pretrained: {loaded} layers loaded, {skipped} skipped")
+
+
 if __name__ == "__main__":
     model = CoSign1SModel(num_classes=1000)
     x = torch.randn(4, 3, 300, 553)
