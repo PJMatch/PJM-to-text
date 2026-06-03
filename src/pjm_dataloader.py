@@ -111,18 +111,23 @@ class PJMDataset(Dataset):
         stem, npy_path, segments = self.samples[idx]
 
         frames = _load_sequence(npy_path)  #[T,553,3]
-        total_frames = frames.shape[0]
+        original_len = frames.shape[0]
+        total_frames = original_len
 
-        if self.use_temporal_aug and not stem.startswith("dev_"):
+        if self.use_temporal_aug:
             frames = random_temporal_scaling(frames, scale_range=self.temporal_scale_range)
             total_frames = frames.shape[0]
+
+        scale = total_frames / original_len
 
         labels = torch.full((total_frames,), -100, dtype=torch.long)
         for i in range(len(segments)):
             g, start = segments[i]
-            end = segments[i + 1][1] if i + 1 < len(segments) else total_frames
+            end = segments[i + 1][1] if i + 1 < len(segments) else original_len
+            scaled_start = round(start * scale)
+            scaled_end = round(end * scale)
             if g in self.gloss2id:
-                labels[start:end] = self.gloss2id[g]
+                labels[scaled_start:scaled_end] = self.gloss2id[g]
 
         return {
             "seq_id": stem,
