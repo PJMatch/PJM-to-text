@@ -6,6 +6,7 @@ import os
 import random
 import time
 
+import jiwer
 import numpy as np
 import torch
 import torch.nn as nn
@@ -179,7 +180,11 @@ def evaluate(model, dataloader, criterion, id2gloss, device):
     avg_loss = total_loss / len(dataloader)
     avg_acc = total_acc / max(total_labeled, 1)
 
-    return avg_loss, avg_acc, all_hyps, all_refs
+    ref_strs = [" ".join(r) if r else "<empty>" for r in all_refs]
+    hyp_strs = [" ".join(h) if h else "<empty>" for h in all_hyps]
+    wer = jiwer.wer(ref_strs, hyp_strs)
+
+    return avg_loss, avg_acc, wer, all_hyps, all_refs
 
 
 def main():
@@ -325,7 +330,7 @@ def main():
     if os.path.exists(latest_ckpt):
         start_epoch, _, _ = load_checkpoint(latest_ckpt, model, optimizer, DEVICE)
 
-    best_loss = float("inf")
+    best_wer = float("inf")
     global_step = 0
 
     for epoch in range(start_epoch, EPOCHS):
@@ -378,14 +383,15 @@ def main():
         avg_train_loss = total_train_loss / len(train_loader)
         avg_train_acc = total_train_acc / max(total_train_labeled, 1)
 
-        val_loss, val_acc, hyps, refs = evaluate(model, dev_loader, criterion, id2gloss, DEVICE)
+        val_loss, val_acc, val_wer, hyps, refs = evaluate(model, dev_loader, criterion, id2gloss, DEVICE)
 
         print(f"Epoch {epoch + 1} done. Train loss: {avg_train_loss:.4f} acc: {avg_train_acc:.3f} | "
-              f"Val loss: {val_loss:.4f} acc: {val_acc:.3f}")
+              f"Val loss: {val_loss:.4f} acc: {val_acc:.3f} WER: {val_wer:.3f}")
 
         epoch_metrics = {
             "val/loss": val_loss,
             "val/acc": val_acc,
+            "val/wer": val_wer,
             "train/loss": avg_train_loss,
             "train/acc": avg_train_acc,
             "train/lr": current_lr,
@@ -415,14 +421,14 @@ def main():
 
         save_checkpoint(model, optimizer, epoch + 1, gloss2id, val_loss, SEED, latest_ckpt)
 
-        if val_loss < best_loss:
-            best_loss = val_loss
+        if val_wer < best_wer:
+            best_wer = val_wer
             best_path = os.path.join(CHECKPOINT_DIR, "best_model.pth")
             save_checkpoint(model, optimizer, epoch + 1, gloss2id, val_loss, SEED, best_path)
-            print(f"-> New best val loss: {best_loss:.4f}")
+            print(f"-> New best WER: {best_wer:.3f}")
 
             extra_info.update({
-                "best_loss": best_loss,
+                "best_wer": best_wer,
                 "best_epoch": epoch + 1,
                 "train_loss": avg_train_loss,
                 "val_loss": val_loss,
