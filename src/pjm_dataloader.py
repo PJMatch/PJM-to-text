@@ -1,10 +1,10 @@
 import json
 import random
+from collections import defaultdict
 from pathlib import Path
 
 import numpy as np
 import torch
-import torch.nn.functional as F
 from torch.nn.utils.rnn import pad_sequence
 from torch.utils.data import Dataset
 
@@ -17,51 +17,6 @@ RH_LEN = 21
 TOTAL_V = POSE_LEN + FACE_LEN + LH_LEN + RH_LEN
 
 
-def load_pjm_annotations(annotation_dir: str, split_file: str):
-    ann = {}
-    annotation_dir = Path(annotation_dir)
-
-    with open(split_file, "r", encoding="utf-8") as f:
-        for line in f:
-            stem = line.strip().replace(".npy", "")
-            if not stem:
-                continue
-
-            json_path = annotation_dir / f"{stem}.json"
-            if not json_path.exists():
-                continue
-
-            with open(json_path, "r", encoding="utf-8") as jf:
-                data = json.load(jf)
-
-            gloss_tokens = data.get("glosses", [])
-            if not gloss_tokens:
-                continue
-
-            ann[stem] = {
-                "gloss_tokens": gloss_tokens,
-                "text": data.get("sentence", ""),
-            }
-
-    return ann
-
-
-def build_gloss_vocab(annotation_dir, split_files):
-    glosses = set()
-
-    for split_file in split_files:
-        ann = load_pjm_annotations(annotation_dir, split_file)
-        for item in ann.values():
-            glosses.update(item["gloss_tokens"])
-
-    gloss2id = {"<blank>": 0}
-    for i, gloss in enumerate(sorted(glosses), start=1):
-        gloss2id[gloss] = i
-
-    id2gloss = {v: k for k, v in gloss2id.items()}
-    return gloss2id, id2gloss
-
-
 def _safe_part(raw, expected_len):
     arr = np.array(raw, dtype=np.float32) if len(raw) > 0 else np.zeros((0, 4), dtype=np.float32)
     arr = arr.reshape(-1, 4)
@@ -72,102 +27,124 @@ def _safe_part(raw, expected_len):
     return arr[:expected_len]
 
 
-def _convert_pjm_frame(frame_dict):
+def _convert_frame(frame_dict):
+    """Convert one MediaPipe frame dict to (TOTAL_V, 3) tensor [x, y, confidence]."""
     pose = _safe_part(frame_dict.get("pose", []), POSE_LEN)
     face = _safe_part(frame_dict.get("face", []), FACE_LEN)
     lh = _safe_part(frame_dict.get("lh", []), LH_LEN)
     rh = _safe_part(frame_dict.get("rh", []), RH_LEN)
-
-    combined = np.concatenate([pose, face, lh, rh], axis=0)
-    # Output x, y, confidence (channels 0, 1, 3) instead of x, y, z (channels 0, 1, 2)
-    return combined[:, [0, 1, 3]]
+    combined = np.concatenate([pose, face, lh, rh], axis=0)  #[553,4]
+    return combined[:, [0, 1, 3]]  #[553,3] x,y,confidence
 
 
-def _load_pjm_sequence(file_path):
+def _load_sequence(file_path):
+    """Load .npy file and return (T, 553, 3) tensor."""
     raw = np.load(file_path, allow_pickle=True)
-    frames = np.stack([_convert_pjm_frame(f) for f in raw])
+    frames = np.stack([_convert_frame(f) for f in raw])
     return torch.tensor(frames, dtype=torch.float32)
+
+
+def _load_gloss_segments(ann_dir, stem):
+    """Return list of (gloss, start_frame) for a segmented file, EoR excluded."""
+    json_path = Path(ann_dir) / f"{stem}.json"
+    with open(json_path) as f:
+        data = json.load(f)
+    glosses = data.get("glosses", [])
+    if not glosses or not isinstance(glosses[0], list):
+        return []
+    return [(g, s) for g, s in glosses if g != "EoR"]
+
+
+def build_gloss_vocab(annotation_dir, split_files):
+    """Build gloss2id from segmented annotations referenced in the split files."""
+    ann_dir = Path(annotation_dir)
+    glosses = set()
+
+    for split_file in split_files:
+        with open(split_file) as f:
+            for line in f:
+                stem = line.strip().replace(".npy", "")
+                if not stem:
+                    continue
+                segments = _load_gloss_segments(ann_dir, stem)
+                for g, _ in segments:
+                    glosses.add(g)
+
+    gloss2id = {"<blank>": 0}
+    for i, g in enumerate(sorted(glosses), start=1):
+        gloss2id[g] = i
+
+    return gloss2id
 
 
 class PJMDataset(Dataset):
     def __init__(
         self,
-        data_dir: str,
-        annotation_dir: str,
-        split_file: str,
-        gloss2id: dict,
-        split: str = "train",
-        use_temporal_aug: bool = True,
+        data_dir,
+        annotation_dir,
+        split_file,
+        gloss2id,
+        use_temporal_aug=True,
         temporal_scale_range=(0.8, 1.2),
     ):
         self.data_dir = Path(data_dir)
-        self.annotations = load_pjm_annotations(annotation_dir, split_file)
+        self.annotation_dir = annotation_dir
         self.gloss2id = gloss2id
-
-        self.split = split
         self.use_temporal_aug = use_temporal_aug
         self.temporal_scale_range = temporal_scale_range
 
         self.samples = []
-        for stem, ann in self.annotations.items():
-            signer = stem.split("_")[0]
-            if signer == "8" or signer == "2":
-                continue
 
-            file_path = self.data_dir / f"{stem}.npy"
-            if not file_path.exists():
-                continue
-
-            gloss_tokens = ann["gloss_tokens"]
-            gloss_ids = [self.gloss2id[g] for g in gloss_tokens if g in self.gloss2id]
-
-            if len(gloss_ids) == 0:
-                continue
-
-            self.samples.append((file_path, stem, gloss_ids))
-
-        if not self.samples:
-            print(f"No matched samples found in {self.data_dir}")
+        with open(split_file) as f:
+            for line in f:
+                stem = line.strip().replace(".npy", "")
+                if not stem:
+                    continue
+                npy_path = self.data_dir / f"{stem}.npy"
+                segments = _load_gloss_segments(annotation_dir, stem)
+                self.samples.append((stem, npy_path, segments))
 
     def __len__(self):
         return len(self.samples)
 
     def __getitem__(self, idx):
-        file_path, seq_id, gloss_ids = self.samples[idx]
+        stem, npy_path, segments = self.samples[idx]
 
-        sequence = _load_pjm_sequence(file_path)
+        frames = _load_sequence(npy_path)  #[T,553,3]
+        total_frames = frames.shape[0]
 
-        if self.split == "train" and self.use_temporal_aug:
-            sequence = random_temporal_scaling(
-                sequence,
-                scale_range=self.temporal_scale_range,
-            )
+        if self.use_temporal_aug and not stem.startswith("dev_"):
+            frames = random_temporal_scaling(frames, scale_range=self.temporal_scale_range)
+            total_frames = frames.shape[0]
 
-        target = torch.tensor(gloss_ids, dtype=torch.long)
+        labels = torch.full((total_frames,), -100, dtype=torch.long)
+        for i in range(len(segments)):
+            g, start = segments[i]
+            end = segments[i + 1][1] if i + 1 < len(segments) else total_frames
+            if g in self.gloss2id:
+                labels[start:end] = self.gloss2id[g]
 
         return {
-            "seq_id": seq_id,
-            "frames": sequence,
-            "target": target,
-            "frame_len": sequence.shape[0],
+            "seq_id": stem,
+            "frames": frames,       #[T,553,3]
+            "labels": labels,       #[T]  -100 for unlabeled/EoR frames
+            "frame_len": total_frames,
         }
 
 
-def pjm_ctc_collate_fn(batch):
+def collate_fn(batch):
     frames = [item["frames"] for item in batch]
-    targets = [item["target"] for item in batch]
+    labels = [item["labels"] for item in batch]
     seq_ids = [item["seq_id"] for item in batch]
 
     frame_lengths = torch.tensor([x.shape[0] for x in frames], dtype=torch.long)
-    target_lengths = torch.tensor([y.shape[0] for y in targets], dtype=torch.long)
 
-    padded_frames = pad_sequence(frames, batch_first=True, padding_value=0.0)
-    padded_targets = pad_sequence(targets, batch_first=True, padding_value=0)
+    padded_frames = pad_sequence(frames, batch_first=True, padding_value=0.0)  #[B,T_max,553,3]
+    padded_labels = pad_sequence(labels, batch_first=True, padding_value=-100)   #[B,T_max]
 
     return {
         "seq_ids": seq_ids,
         "frames": padded_frames,
+        "labels": padded_labels,
         "frame_lengths": frame_lengths,
-        "targets": padded_targets,
-        "target_lengths": target_lengths,
     }
