@@ -173,14 +173,16 @@ def evaluate(model, dataloader, criterion, id2gloss, device):
 
             hyps = collapse_predictions(logits, out_lengths)
             for b in range(len(batch["seq_ids"])):
-                ref_ids = labels[b][labels[b] != -100]
+                ref_ids = d_labels[b][d_labels[b] != -100]
                 ref_collapsed = []
                 prev = -1
                 for v in ref_ids:
                     token = v.item()
-                    if token != 0 and token != prev:
+                    if token == 0:
+                        continue
+                    if token != prev:
                         ref_collapsed.append(token)
-                    prev = token
+                        prev = token
                 ref = [id2gloss.get(v, "") for v in ref_collapsed]
                 hyp = [id2gloss.get(v, "") for v in hyps[b] if v != 0]
                 all_refs.append(ref)

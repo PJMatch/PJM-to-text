@@ -44,15 +44,24 @@ def _load_sequence(file_path):
     return torch.tensor(frames, dtype=torch.float32)
 
 
+EXCLUDE_SENTENCE_IDS = {"45"}
+
+
+def _sentence_id(stem):
+    """Extract sentence_id from stem (e.g. '1_01_20260311_171649' -> '01')."""
+    parts = stem.split("_")
+    return parts[1] if len(parts) > 1 else None
+
+
 def _load_gloss_segments(ann_dir, stem):
-    """Return list of (gloss, start_frame) for a segmented file, EoR excluded."""
+    """Return list of (gloss, start_frame) including EoR as ('EoR', start)."""
     json_path = Path(ann_dir) / f"{stem}.json"
     with open(json_path) as f:
         data = json.load(f)
     glosses = data.get("glosses", [])
     if not glosses or not isinstance(glosses[0], list):
         return []
-    return [(g, s) for g, s in glosses if g != "EoR"]
+    return [(g, s) for g, s in glosses]
 
 
 def build_gloss_vocab(annotation_dir, split_files):
@@ -66,9 +75,12 @@ def build_gloss_vocab(annotation_dir, split_files):
                 stem = line.strip().replace(".npy", "")
                 if not stem:
                     continue
+                if _sentence_id(stem) in EXCLUDE_SENTENCE_IDS:
+                    continue
                 segments = _load_gloss_segments(ann_dir, stem)
                 for g, _ in segments:
-                    glosses.add(g)
+                    if g != "EoR":
+                        glosses.add(g)
 
     gloss2id = {"<blank>": 0}
     for i, g in enumerate(sorted(glosses), start=1):
@@ -100,6 +112,8 @@ class PJMDataset(Dataset):
                 stem = line.strip().replace(".npy", "")
                 if not stem:
                     continue
+                if _sentence_id(stem) in EXCLUDE_SENTENCE_IDS:
+                    continue
                 npy_path = self.data_dir / f"{stem}.npy"
                 segments = _load_gloss_segments(annotation_dir, stem)
                 self.samples.append((stem, npy_path, segments))
@@ -120,19 +134,30 @@ class PJMDataset(Dataset):
 
         scale = total_frames / original_len
 
-        labels = torch.full((total_frames,), -100, dtype=torch.long)
+        eor_start = original_len
+        for g, start in segments:
+            if g == "EoR":
+                eor_start = start
+                break
+
+        labels = torch.zeros(total_frames, dtype=torch.long)
         for i in range(len(segments)):
             g, start = segments[i]
-            end = segments[i + 1][1] if i + 1 < len(segments) else original_len
+            if g == "EoR":
+                break
+            end = segments[i + 1][1] if i + 1 < len(segments) else eor_start
             scaled_start = round(start * scale)
             scaled_end = round(end * scale)
             if g in self.gloss2id:
                 labels[scaled_start:scaled_end] = self.gloss2id[g]
 
+        eor_scaled = round(eor_start * scale)
+        labels[eor_scaled:] = -100
+
         return {
             "seq_id": stem,
             "frames": frames,       #[T,553,3]
-            "labels": labels,       #[T]  -100 for unlabeled/EoR frames
+            "labels": labels,       #[T]  0=blank, >0=gloss
             "frame_len": total_frames,
         }
 

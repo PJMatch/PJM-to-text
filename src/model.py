@@ -245,17 +245,23 @@ class GlossClassifier(nn.Module):
         state = ckpt["model_state_dict"]
         own_state = self.state_dict()
 
+        key_remap = {}
+        for k in state:
+            if "causal_conv" in k:
+                key_remap[k] = k.replace("causal_conv", "temporal_conv")
+
         loaded = 0
         skipped = 0
         for k, v in state.items():
-            if k in own_state and own_state[k].shape == v.shape:
-                own_state[k] = v
+            target_k = key_remap.get(k, k)
+            if target_k in own_state and own_state[target_k].shape == v.shape:
+                own_state[target_k] = v
                 loaded += 1
             else:
                 skipped += 1
 
         self.load_state_dict(own_state)
-        print(f"Pretrained: {loaded} layers loaded, {skipped} skipped")
+        print(f"Pretrained: {loaded} layers loaded, {skipped} skipped ({len(key_remap)} keys remapped)")
 
 
 if __name__ == "__main__":
