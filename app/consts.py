@@ -15,4 +15,4 @@ RH_LEN = 21
 TOTAL_V = POSE_LEN + FACE_LEN + LH_LEN + RH_LEN
 
 UI_FILE = "res/ui/main_window.ui"
-TESTING_VIDEO_PATH = r"local"
+TESTING_VIDEO_PATH = r"/home/piotrek/all/pjmatch/testing_vids/avatar_combined_cut_100.mp4"
