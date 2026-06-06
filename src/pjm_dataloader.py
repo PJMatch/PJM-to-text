@@ -1,5 +1,4 @@
 import json
-import random
 from collections import defaultdict
 from pathlib import Path
 
@@ -7,8 +6,6 @@ import numpy as np
 import torch
 from torch.nn.utils.rnn import pad_sequence
 from torch.utils.data import Dataset
-
-from phoenix_dataloader import random_temporal_scaling
 
 POSE_LEN = 33
 FACE_LEN = 478
@@ -33,54 +30,42 @@ def _convert_frame(frame_dict):
     face = _safe_part(frame_dict.get("face", []), FACE_LEN)
     lh = _safe_part(frame_dict.get("lh", []), LH_LEN)
     rh = _safe_part(frame_dict.get("rh", []), RH_LEN)
-    combined = np.concatenate([pose, face, lh, rh], axis=0)  #[553,4]
-    return combined[:, [0, 1, 3]]  #[553,3] x,y,confidence
+    combined = np.concatenate([pose, face, lh, rh], axis=0)
+    return combined[:, [0, 1, 3]]
 
 
-def _load_sequence(file_path):
-    """Load .npy file and return (T, 553, 3) tensor."""
-    raw = np.load(file_path, allow_pickle=True)
-    frames = np.stack([_convert_frame(f) for f in raw])
-    return torch.tensor(frames, dtype=torch.float32)
-
-
-EXCLUDE_SENTENCE_IDS = {"45"}
-
-
-def _sentence_id(stem):
-    """Extract sentence_id from stem (e.g. '1_01_20260311_171649' -> '01')."""
-    parts = stem.split("_")
-    return parts[1] if len(parts) > 1 else None
-
-
-def _load_gloss_segments(ann_dir, stem):
-    """Return list of (gloss, start_frame) including EoR as ('EoR', start)."""
+def _load_segments(ann_dir, stem):
+    """Return list of (gloss, start) and the EoR frame."""
     json_path = Path(ann_dir) / f"{stem}.json"
     with open(json_path) as f:
         data = json.load(f)
-    glosses = data.get("glosses", [])
-    if not glosses or not isinstance(glosses[0], list):
-        return []
-    return [(g, s) for g, s in glosses]
+    entries = data.get("glosses", [])
+    if not entries or not isinstance(entries[0], list):
+        return [], None
+    eor = None
+    for g, s in entries:
+        if g == "EoR":
+            eor = s
+            break
+    return entries, eor
 
 
 def build_gloss_vocab(annotation_dir, split_files):
-    """Build gloss2id from segmented annotations referenced in the split files."""
+    """Build gloss2id from segmented annotations."""
     ann_dir = Path(annotation_dir)
     glosses = set()
 
     for split_file in split_files:
         with open(split_file) as f:
             for line in f:
-                stem = line.strip().replace(".npy", "")
-                if not stem:
+                line = line.strip()
+                if not line:
                     continue
-                if _sentence_id(stem) in EXCLUDE_SENTENCE_IDS:
+                parts = line.split(",")
+                if len(parts) < 3:
                     continue
-                segments = _load_gloss_segments(ann_dir, stem)
-                for g, _ in segments:
-                    if g != "EoR":
-                        glosses.add(g)
+                gloss_name = parts[2]
+                glosses.add(gloss_name)
 
     gloss2id = {"<blank>": 0}
     for i, g in enumerate(sorted(glosses), start=1):
@@ -90,91 +75,65 @@ def build_gloss_vocab(annotation_dir, split_files):
 
 
 class PJMDataset(Dataset):
-    def __init__(
-        self,
-        data_dir,
-        annotation_dir,
-        split_file,
-        gloss2id,
-        use_temporal_aug=True,
-        temporal_scale_range=(0.8, 1.2),
-    ):
+    """Dataset for isolated gloss clips."""
+
+    def __init__(self, data_dir, annotation_dir, split_file, gloss2id):
         self.data_dir = Path(data_dir)
-        self.annotation_dir = annotation_dir
-        self.gloss2id = gloss2id
-        self.use_temporal_aug = use_temporal_aug
-        self.temporal_scale_range = temporal_scale_range
+        self.samples = []  # (stem, start, end, gloss_id)
 
-        self.samples = []
-
+        stem_segments = defaultdict(list)
         with open(split_file) as f:
             for line in f:
-                stem = line.strip().replace(".npy", "")
-                if not stem:
+                line = line.strip()
+                if not line:
                     continue
-                if _sentence_id(stem) in EXCLUDE_SENTENCE_IDS:
+                parts = line.split(",")
+                if len(parts) < 3:
                     continue
-                npy_path = self.data_dir / f"{stem}.npy"
-                segments = _load_gloss_segments(annotation_dir, stem)
-                self.samples.append((stem, npy_path, segments))
+                stem, start_str, gloss = parts[0], parts[1], parts[2]
+                stem = stem.replace(".npy", "")
+                stem_segments[stem].append((int(start_str), gloss))
+
+        for stem, segs in stem_segments.items():
+            entries, eor = _load_segments(annotation_dir, stem)
+            if not entries:
+                continue
+
+            seg_map = {}
+            for i, (g, s) in enumerate(entries):
+                if g == "EoR":
+                    continue
+                next_start = entries[i + 1][1] if i + 1 < len(entries) else eor
+                seg_map[(g, s)] = next_start
+
+            for start, gloss_name in segs:
+                end = seg_map.get((gloss_name, start))
+                if end is not None and end > start:
+                    gid = gloss2id.get(gloss_name)
+                    if gid is not None:
+                        self.samples.append((stem, start, end, gid))
 
     def __len__(self):
         return len(self.samples)
 
     def __getitem__(self, idx):
-        stem, npy_path, segments = self.samples[idx]
+        stem, start, end, gloss_id = self.samples[idx]
 
-        frames = _load_sequence(npy_path)  #[T,553,3]
-        original_len = frames.shape[0]
-        total_frames = original_len
+        npy_path = self.data_dir / f"{stem}.npy"
+        raw = np.load(npy_path, allow_pickle=True)
+        frames = np.stack([_convert_frame(f) for f in raw[start:end]])  #[T, 553, 3]
+        clip = torch.tensor(frames, dtype=torch.float32)  #[T, 553, 3]
 
-        if self.use_temporal_aug:
-            frames = random_temporal_scaling(frames, scale_range=self.temporal_scale_range)
-            total_frames = frames.shape[0]
-
-        scale = total_frames / original_len
-
-        eor_start = original_len
-        for g, start in segments:
-            if g == "EoR":
-                eor_start = start
-                break
-
-        labels = torch.zeros(total_frames, dtype=torch.long)
-        for i in range(len(segments)):
-            g, start = segments[i]
-            if g == "EoR":
-                break
-            end = segments[i + 1][1] if i + 1 < len(segments) else eor_start
-            scaled_start = round(start * scale)
-            scaled_end = round(end * scale)
-            if g in self.gloss2id:
-                labels[scaled_start:scaled_end] = self.gloss2id[g]
-
-        eor_scaled = round(eor_start * scale)
-        labels[eor_scaled:] = -100
-
-        return {
-            "seq_id": stem,
-            "frames": frames,       #[T,553,3]
-            "labels": labels,       #[T]  0=blank, >0=gloss
-            "frame_len": total_frames,
-        }
+        return clip, gloss_id, clip.shape[0]
 
 
 def collate_fn(batch):
-    frames = [item["frames"] for item in batch]
-    labels = [item["labels"] for item in batch]
-    seq_ids = [item["seq_id"] for item in batch]
+    clips = [item[0] for item in batch]
+    labels = [item[1] for item in batch]
+    lengths = [item[2] for item in batch]
 
-    frame_lengths = torch.tensor([x.shape[0] for x in frames], dtype=torch.long)
+    padded = pad_sequence(clips, batch_first=True, padding_value=0.0)  #[B, T_max, 553, 3]
+    labels = torch.tensor(labels, dtype=torch.long)
+    lengths = torch.tensor(lengths, dtype=torch.long)
 
-    padded_frames = pad_sequence(frames, batch_first=True, padding_value=0.0)  #[B,T_max,553,3]
-    padded_labels = pad_sequence(labels, batch_first=True, padding_value=-100)   #[B,T_max]
-
-    return {
-        "seq_ids": seq_ids,
-        "frames": padded_frames,
-        "labels": padded_labels,
-        "frame_lengths": frame_lengths,
-    }
+    return padded, labels, lengths

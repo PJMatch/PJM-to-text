@@ -1,12 +1,9 @@
-"""Training loop for per-frame gloss classification."""
-
 import argparse
 import json
 import os
 import random
 import time
 
-import jiwer
 import numpy as np
 import torch
 import torch.nn as nn
@@ -17,7 +14,6 @@ from torch.utils.tensorboard import SummaryWriter
 
 try:
     import wandb
-
     WANDB_AVAILABLE = True
 except ImportError:
     WANDB_AVAILABLE = False
@@ -27,26 +23,19 @@ from pjm_dataloader import PJMDataset, build_gloss_vocab, collate_fn
 
 
 def parse_args():
-    parser = argparse.ArgumentParser(description="Train gloss classification model")
-    parser.add_argument(
-        "--reproduce_run",
-        type=str,
-        default=None,
-        help="Path to training_run.json file to reproduce a previous run",
-    )
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--reproduce_run", type=str, default=None)
     return parser.parse_args()
 
 
 def load_config(config_path="config.yaml"):
     with open(config_path) as f:
-        config = yaml.safe_load(f)
-    return config
+        return yaml.safe_load(f)
 
 
 def load_training_run_manifest(manifest_path):
     with open(manifest_path) as f:
-        run_info = json.load(f)
-    return run_info
+        return json.load(f)
 
 
 def set_seed(seed, deterministic=True):
@@ -82,14 +71,13 @@ def save_training_run(filepath, config, seed, deterministic, extra_info=None):
         json.dump(run_info, f, indent=2)
 
 
-def save_checkpoint(model, optimizer, epoch, gloss2id, val_loss, seed, filepath):
+def save_checkpoint(model, optimizer, epoch, gloss2id, val_acc, filepath):
     checkpoint = {
         "epoch": epoch,
         "model_state_dict": model.state_dict(),
         "optimizer_state_dict": optimizer.state_dict(),
         "gloss2id": gloss2id,
-        "val_loss": val_loss,
-        "seed": seed,
+        "val_acc": val_acc,
     }
     torch.save(checkpoint, filepath)
 
@@ -99,135 +87,91 @@ def load_checkpoint(filepath, model, optimizer, device):
     model.load_state_dict(checkpoint["model_state_dict"])
     optimizer.load_state_dict(checkpoint["optimizer_state_dict"])
     epoch = checkpoint["epoch"]
-    val_loss = checkpoint.get("val_loss", float("inf"))
-    saved_seed = checkpoint.get("seed", "unknown")
-    print(f"Loaded checkpoint '{filepath}' (epoch {epoch}, seed={saved_seed})")
+    print(f"Loaded '{filepath}' (epoch {epoch})")
     return epoch, model, optimizer
 
 
-def downsample_labels(labels, frame_lengths, out_lengths):
-    """labels: [B, T] padded with -100. Return [B, T_out] subsampled to match temporal CNN."""
-    B = labels.size(0)
-    T_out = out_lengths.max().item()
-    downsampled = torch.full((B, T_out), -100, dtype=labels.dtype, device=labels.device)
-    for b in range(B):
-        in_len = frame_lengths[b].item()
-        out_len = out_lengths[b].item()
-        indices = (torch.arange(out_len, device=labels.device).float() * (in_len / out_len)).long()
-        downsampled[b, :out_len] = labels[b, indices]
-    return downsampled
-
-
-def per_frame_accuracy(logits, labels):
-    """Accuracy over labeled frames (ignore -100)."""
-    preds = logits.argmax(dim=-1)  #[B, T]
-    mask = labels != -100
-    if mask.sum() == 0:
-        return 0.0
-    correct = (preds[mask] == labels[mask]).sum().item()
-    return correct / mask.sum().item()
-
-
-def collapse_predictions(logits, out_lengths):
-    """Argmax and collapse consecutive duplicates into gloss sequences"""
-    preds = logits.argmax(dim=-1)  #[B, T]
-    sequences = []
-    for b in range(preds.size(0)):
-        seq = []
-        prev = -1
-        for t in range(out_lengths[b].item()):
-            token = preds[b, t].item()
-            if token == 0:
-                continue
-            if token != prev:
-                seq.append(token)
-                prev = token
-        sequences.append(seq)
-    return sequences
-
-
-def evaluate(model, dataloader, criterion, id2gloss, device):
+def evaluate(model, dataloader, criterion, device, id2gloss=None):
     model.eval()
     total_loss = 0.0
-    total_acc = 0.0
-    total_labeled = 0
-    all_hyps = []
-    all_refs = []
+    total_top1 = 0
+    total_top3 = 0
+    total_samples = 0
+    all_preds = []
+    all_labels = []
 
     with torch.no_grad():
-        for batch in dataloader:
-            frames = batch["frames"].to(device).permute(0, 3, 1, 2)  #[B,C,T,V]
-            frame_lengths = batch["frame_lengths"].to(device)
-            labels = batch["labels"].to(device)  #[B,T] -100 padding
+        for frames, labels, lengths in dataloader:
+            frames = frames.permute(0, 3, 1, 2).to(device)
+            labels = labels.to(device)
+            lengths = lengths.to(device)
 
-            logits, out_lengths = model(frames, frame_lengths)  #[B,T',V]
-
-            d_labels = downsample_labels(labels, frame_lengths, out_lengths)  #[B,T']
-
-            loss = criterion(logits.transpose(1, 2), d_labels)
+            logits = model(frames, lengths)
+            loss = criterion(logits, labels)
             total_loss += loss.item()
 
-            acc, labeled = per_frame_accuracy(logits, d_labels), (d_labels != -100).sum().item()
-            total_acc += acc * labeled if labeled > 0 else 0
-            total_labeled += labeled
+            top3 = logits.topk(3, dim=-1).indices
+            total_top1 += (top3[:, 0] == labels).sum().item()
+            total_top3 += (top3 == labels.unsqueeze(-1)).any(dim=-1).sum().item()
+            total_samples += labels.size(0)
 
-            hyps = collapse_predictions(logits, out_lengths)
-            for b in range(len(batch["seq_ids"])):
-                ref_ids = d_labels[b][d_labels[b] != -100]
-                ref_collapsed = []
-                prev = -1
-                for v in ref_ids:
-                    token = v.item()
-                    if token == 0:
-                        continue
-                    if token != prev:
-                        ref_collapsed.append(token)
-                        prev = token
-                ref = [id2gloss.get(v, "") for v in ref_collapsed]
-                hyp = [id2gloss.get(v, "") for v in hyps[b] if v != 0]
-                all_refs.append(ref)
-                all_hyps.append(hyp)
+            all_preds.append(logits.argmax(dim=-1).cpu())
+            all_labels.append(labels.cpu())
 
     avg_loss = total_loss / len(dataloader)
-    avg_acc = total_acc / max(total_labeled, 1)
+    top1 = total_top1 / max(total_samples, 1)
+    top3 = total_top3 / max(total_samples, 1)
 
-    ref_strs = [" ".join(r) if r else "<empty>" for r in all_refs]
-    hyp_strs = [" ".join(h) if h else "<empty>" for h in all_hyps]
-    wer = jiwer.wer(ref_strs, hyp_strs)
+    preds = torch.cat(all_preds)
+    targets = torch.cat(all_labels)
 
-    return avg_loss, avg_acc, wer, all_hyps, all_refs
+    n_classes = model.head.out_features
+    conf = torch.zeros(n_classes, n_classes, dtype=torch.long)
+    for t, p in zip(targets, preds):
+        conf[t, p] += 1
+
+    tp = conf.diag().float()
+    fp = conf.sum(dim=0) - tp
+    fn = conf.sum(dim=1) - tp
+
+    precision = tp / (tp + fp + 1e-10)
+    recall = tp / (tp + fn + 1e-10)
+    f1_per_class = 2 * precision * recall / (precision + recall + 1e-10)
+    macro_f1 = f1_per_class.mean().item()
+
+    worst = []
+    if id2gloss is not None:
+        for c in range(n_classes):
+            total_c = (targets == c).sum().item()
+            if total_c > 0:
+                correct_c = (preds[targets == c] == c).sum().item()
+                acc_c = correct_c / total_c
+                if acc_c < 0.5:
+                    name = id2gloss.get(c, f"id{c}")
+                    worst.append((name, correct_c, total_c, acc_c))
+
+    return avg_loss, top1, top3, macro_f1, worst, conf
 
 
 def main():
     args = parse_args()
 
     if args.reproduce_run is not None:
-        print(f"Loading training run manifest from: {args.reproduce_run}")
+        print(f"Loading run: {args.reproduce_run}")
         run_info = load_training_run_manifest(args.reproduce_run)
         config = run_info["config"]
         SEED = run_info["seed"]
         DETERMINISTIC = run_info["deterministic"]
-        original_run_id = run_info.get("run_id", "unknown")
-        REPRODUCING_RUN = True
-        print(f"Reproducing run: {original_run_id}")
-        print(f"Seed: {SEED} | Deterministic: {DETERMINISTIC}")
     else:
         config = load_config()
         SEED = config["training"].get("seed", 42)
         DETERMINISTIC = config["training"].get("deterministic", True)
-        REPRODUCING_RUN = False
-        original_run_id = None
 
     EPOCHS = config["training"]["epochs"]
     BATCH_SIZE = config["training"]["batch_size"]
     LEARNING_RATE = float(config["training"]["learning_rate"])
     WEIGHT_DECAY = float(config["training"]["weight_decay"])
-    GRAD_CLIP = float(config["training"]["grad_clip"])
-    INIT_WEIGHTS = config["training"].get("init_weights", None)
     MODEL_DROPOUT = config["model"]["dropout"]
-    LSTM_HIDDEN = config["model"]["lstm_hidden"]
-    FREEZE_BACKBONE = config["model"]["freeze_backbone"]
-    INIT_BACKBONE = config["model"].get("init_backbone", None)
 
     if config["system"]["device"] == "auto":
         DEVICE = torch.device("cuda" if torch.cuda.is_available() else "cpu")
@@ -235,8 +179,7 @@ def main():
         DEVICE = torch.device(config["system"]["device"])
 
     CHECKPOINT_DIR = config["system"]["checkpoint_dir"]
-    DATA_DIR_TRAIN = config["data"]["train_dir"]
-    DATA_DIR_DEV = config["data"]["dev_dir"]
+    DATA_DIR = config["data"]["data_dir"]
     ANN_DIR = config["data"]["annotation_dir"]
     ANN_TRAIN = config["data"]["train_ann"]
     ANN_DEV = config["data"]["dev_ann"]
@@ -250,16 +193,11 @@ def main():
     LOG_WANDB = config["logging"]["wandb"] and WANDB_AVAILABLE
     LOG_DIR = config["logging"]["log_dir"]
     LOG_INTERVAL = config["logging"].get("log_interval", 50)
-    HISTOGRAM_INTERVAL = config["logging"].get("histogram_interval", 5)
 
     os.makedirs(CHECKPOINT_DIR, exist_ok=True)
     set_seed(SEED, deterministic=DETERMINISTIC)
 
-    if REPRODUCING_RUN:
-        run_id = f"{original_run_id}_reproduction"
-    else:
-        run_id = f"gloss_{time.strftime('%Y%m%d_%H%M%S')}"
-
+    run_id = f"isolated_{time.strftime('%Y%m%d_%H%M%S')}"
     tb_writer = SummaryWriter(os.path.join(LOG_DIR, run_id)) if LOG_TENSORBOARD else None
     if LOG_WANDB:
         wandb.init(project="gloss-sign-language", name=run_id, config=config, dir=LOG_DIR)
@@ -271,8 +209,8 @@ def main():
     print(f"Vocab size: {num_classes}")
 
     print("Loading datasets")
-    train_dataset = PJMDataset(DATA_DIR_TRAIN, ANN_DIR, ANN_TRAIN, gloss2id)
-    dev_dataset = PJMDataset(DATA_DIR_DEV, ANN_DIR, ANN_DEV, gloss2id, use_temporal_aug=False)
+    train_dataset = PJMDataset(DATA_DIR, ANN_DIR, ANN_TRAIN, gloss2id)
+    dev_dataset = PJMDataset(DATA_DIR, ANN_DIR, ANN_DEV, gloss2id)
 
     g = torch.Generator()
     g.manual_seed(SEED)
@@ -300,152 +238,104 @@ def main():
     print(f"Train: {len(train_dataset)} | Dev: {len(dev_dataset)} | Classes: {num_classes}")
 
     print(f"Initializing model on {DEVICE}")
-    model = GlossClassifier(
-        num_classes=num_classes,
-        dropout=MODEL_DROPOUT,
-        lstm_hidden=LSTM_HIDDEN,
-        freeze_backbone=FREEZE_BACKBONE,
-    )
+    model = GlossClassifier(num_classes=num_classes, dropout=MODEL_DROPOUT)
     model.to(DEVICE)
 
-    if INIT_BACKBONE and os.path.exists(INIT_BACKBONE):
-        model.load_pretrained(INIT_BACKBONE, DEVICE)
-
     optimizer = optim.AdamW(model.parameters(), lr=LEARNING_RATE, weight_decay=WEIGHT_DECAY)
-    criterion = nn.CrossEntropyLoss(ignore_index=-100)
+    criterion = nn.CrossEntropyLoss()
 
-    if INIT_WEIGHTS and os.path.exists(INIT_WEIGHTS):
-        print(f"Loading checkpoint: {INIT_WEIGHTS}")
-        ckpt = torch.load(INIT_WEIGHTS, map_location=DEVICE, weights_only=False)
-        model.load_state_dict(ckpt["model_state_dict"])
-        print(f"  -> Loaded from epoch {ckpt.get('epoch', '?')}")
-
-    run_manifest_path = os.path.join(CHECKPOINT_DIR, f"{run_id}_training_run.json")
-    extra_info = {
-        "run_id": run_id,
-        "num_classes": num_classes,
-        "train_samples": len(train_dataset),
-        "dev_samples": len(dev_dataset),
-        "device": str(DEVICE),
-    }
-    if REPRODUCING_RUN:
-        extra_info.update({
-            "is_reproduction": True,
-            "original_run_id": original_run_id,
-            "original_manifest_path": args.reproduce_run,
-        })
-    save_training_run(run_manifest_path, config, SEED, DETERMINISTIC, extra_info=extra_info)
+    scheduler = optim.lr_scheduler.MultiStepLR(
+        optimizer, milestones=OPTIMIZER_MILESTONES, gamma=OPTIMIZER_GAMMA
+    )
 
     start_epoch = 0
     latest_ckpt = os.path.join(CHECKPOINT_DIR, "latest.pth")
     if os.path.exists(latest_ckpt):
         start_epoch, _, _ = load_checkpoint(latest_ckpt, model, optimizer, DEVICE)
 
-    best_wer = float("inf")
+    best_acc = 0.0
     global_step = 0
 
     for epoch in range(start_epoch, EPOCHS):
-        current_lr = LEARNING_RATE
-        if epoch >= OPTIMIZER_MILESTONES[0]:
-            current_lr *= OPTIMIZER_GAMMA
-        if len(OPTIMIZER_MILESTONES) > 1 and epoch >= OPTIMIZER_MILESTONES[1]:
-            current_lr *= OPTIMIZER_GAMMA
-
-        for param_group in optimizer.param_groups:
-            param_group["lr"] = current_lr
-
         model.train()
         total_train_loss = 0.0
-        total_train_acc = 0.0
-        total_train_labeled = 0
+        total_train_correct = 0
+        total_train_samples = 0
 
-        print(f"Epoch {epoch + 1:3d} | LR: {current_lr:.2e}")
+        print(f"Epoch {epoch + 1:3d} | LR: {scheduler.get_last_lr()[0]:.2e}")
 
-        for batch_idx, batch in enumerate(train_loader):
-            frames = batch["frames"].to(DEVICE).permute(0, 3, 1, 2)  #[B,C,T,V]
-            frame_lengths = batch["frame_lengths"].to(DEVICE)
-            labels = batch["labels"].to(DEVICE)  #[B,T]
+        for batch_idx, (frames, labels, lengths) in enumerate(train_loader):
+            frames = frames.permute(0, 3, 1, 2).to(DEVICE)  #[B, C, T, V]
+            labels = labels.to(DEVICE)
+            lengths = lengths.to(DEVICE)
 
             optimizer.zero_grad()
 
-            logits, out_lengths = model(frames, frame_lengths)  #[B,T',V]
-
-            d_labels = downsample_labels(labels, frame_lengths, out_lengths)  #[B,T']
-
-            loss = criterion(logits.transpose(1, 2), d_labels)
+            logits = model(frames, lengths)  #[B, V]
+            loss = criterion(logits, labels)
             loss.backward()
 
-            torch.nn.utils.clip_grad_norm_(model.parameters(), GRAD_CLIP)
+            torch.nn.utils.clip_grad_norm_(model.parameters(), 1.0)
             optimizer.step()
 
             total_train_loss += loss.item()
-            acc, labeled = per_frame_accuracy(logits, d_labels), (d_labels != -100).sum().item()
-            total_train_acc += acc * labeled if labeled > 0 else 0
-            total_train_labeled += labeled
+            preds = logits.argmax(dim=-1)
+            total_train_correct += (preds == labels).sum().item()
+            total_train_samples += labels.size(0)
             global_step += 1
 
             if tb_writer and batch_idx % LOG_INTERVAL == 0:
                 tb_writer.add_scalar("batch/loss", loss.item(), global_step)
-                tb_writer.add_scalar("batch/acc", acc, global_step)
+                batch_acc = (preds == labels).float().mean().item()
+                tb_writer.add_scalar("batch/acc", batch_acc, global_step)
 
             if batch_idx % 100 == 0:
-                print(f"  Batch {batch_idx + 1}/{len(train_loader)} | Loss: {loss.item():.4f} | Acc: {acc:.3f}")
+                batch_acc = (preds == labels).float().mean().item()
+                print(f"  Batch {batch_idx + 1}/{len(train_loader)} | Loss: {loss.item():.4f} | Acc: {batch_acc:.3f}")
 
         avg_train_loss = total_train_loss / len(train_loader)
-        avg_train_acc = total_train_acc / max(total_train_labeled, 1)
+        avg_train_acc = total_train_correct / max(total_train_samples, 1)
 
-        val_loss, val_acc, val_wer, hyps, refs = evaluate(model, dev_loader, criterion, id2gloss, DEVICE)
+        val_loss, val_top1, val_top3, val_mf1, val_worst, val_conf = evaluate(
+            model, dev_loader, criterion, DEVICE, id2gloss
+        )
 
         print(f"Epoch {epoch + 1} done. Train loss: {avg_train_loss:.4f} acc: {avg_train_acc:.3f} | "
-              f"Val loss: {val_loss:.4f} acc: {val_acc:.3f} WER: {val_wer:.3f}")
+              f"Val loss: {val_loss:.4f} top1: {val_top1:.3f} top3: {val_top3:.3f} mF1: {val_mf1:.3f}")
+
+        if val_worst:
+            print(f"  Glosses <50%: {len(val_worst)} — worst: {val_worst[0][0]} ({val_worst[0][3]*100:.0f}%)")
 
         epoch_metrics = {
             "val/loss": val_loss,
-            "val/acc": val_acc,
-            "val/wer": val_wer,
+            "val/acc": val_top1,
+            "val/top3": val_top3,
+            "val/macro_f1": val_mf1,
             "train/loss": avg_train_loss,
             "train/acc": avg_train_acc,
-            "train/lr": current_lr,
+            "train/lr": scheduler.get_last_lr()[0],
         }
         if tb_writer:
             for k, v in epoch_metrics.items():
                 tb_writer.add_scalar(k, v, epoch + 1)
 
-            for i in range(min(3, len(refs))):
-                ref_str = " ".join(refs[i]) if refs[i] else "<empty>"
-                hyp_str = " ".join(hyps[i]) if hyps[i] else "<empty>"
-                tb_writer.add_text(
-                    f"val/example_{i}",
-                    f"**Ref:** {ref_str}\n\n**Hyp:** {hyp_str}",
-                    epoch + 1,
-                )
-
-            if (epoch + 1) % HISTOGRAM_INTERVAL == 0 or epoch == 0:
-                for name, param in model.named_parameters():
-                    if param.ndim >= 2:
-                        tb_writer.add_histogram(f"weights/{name}", param.data, epoch + 1)
-                        if param.grad is not None:
-                            tb_writer.add_histogram(f"grads/{name}", param.grad, epoch + 1)
+            n_classes = val_conf.shape[0]
+            for c in range(min(5, len(val_worst))):
+                name = val_worst[c][0]
+                tb_writer.add_scalar(f"worst_glosses/{name}", val_worst[c][3], epoch + 1)
 
         if LOG_WANDB:
             wandb.log(epoch_metrics, step=epoch + 1)
 
-        save_checkpoint(model, optimizer, epoch + 1, gloss2id, val_loss, SEED, latest_ckpt)
+        scheduler.step()
 
-        if val_wer < best_wer:
-            best_wer = val_wer
+        save_checkpoint(model, optimizer, epoch + 1, gloss2id, val_top1, latest_ckpt)
+
+        if val_top1 > best_acc:
+            best_acc = val_top1
             best_path = os.path.join(CHECKPOINT_DIR, "best_model.pth")
-            save_checkpoint(model, optimizer, epoch + 1, gloss2id, val_loss, SEED, best_path)
-            print(f"-> New best WER: {best_wer:.3f}")
-
-            extra_info.update({
-                "best_wer": best_wer,
-                "best_epoch": epoch + 1,
-                "train_loss": avg_train_loss,
-                "val_loss": val_loss,
-                "val_acc": val_acc,
-            })
-            save_training_run(run_manifest_path, config, SEED, DETERMINISTIC, extra_info=extra_info)
+            save_checkpoint(model, optimizer, epoch + 1, gloss2id, val_top1, best_path)
+            print(f"-> New best val acc: {best_acc:.3f}")
 
     if tb_writer:
         tb_writer.close()
