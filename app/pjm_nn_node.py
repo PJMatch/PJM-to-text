@@ -66,7 +66,9 @@ class GlossTracker:
                     conf_sum += match.confidence
 
             if votes >= consts.VOTE_THRESHOLD:
-                output_parts.append(ref_gloss.name)
+                avg_conf = conf_sum / votes
+                if avg_conf >= 0.25:
+                    output_parts.append(ref_gloss.name)
 
         return " ".join(output_parts) if output_parts else None
 
@@ -123,7 +125,7 @@ class SentenceSmoother:
 
         self.current_cluster = []
 
-        if len(best_words) < 2 and cluster_duration < 5:
+        if len(best_words) < 2 and cluster_duration < 4:
             return None
 
         if cluster_duration < 3:

@@ -58,6 +58,9 @@ class PJMatchWindow(QMainWindow):
 
 
 if __name__ == "__main__":
+    with open("prediction_log.txt", "w") as f:
+        f.write("")
+
     app = QApplication(sys.argv)
     window = PJMatchWindow()
     window.show()

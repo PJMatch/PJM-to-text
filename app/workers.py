@@ -138,6 +138,9 @@ class AIWorker(QThread):
                     print(f"\n--- EMITTING TO UI: {final_sentence} ---\n")
                     self.prediction_ready.emit(final_sentence)
 
+                    with open("prediction_log.txt", "a") as f:
+                        f.write(final_sentence + "\n")
+
     def stop(self):
         leftover = self.smoother._commit()
         if leftover:
