@@ -93,6 +93,7 @@ class MPNode:
         self.face_detector.close()
         self.pose_detector.close()
         self.hand_detector.close()
+        self.extractor_thread.shutdown(wait=False)
 
     def extract_raw_keypoints(self, pose_result, hand_result, face_result):
         """Extracts visible landmarks into a structured dictionary without zero-padding.

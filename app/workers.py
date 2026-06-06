@@ -51,24 +51,31 @@ class VisionWorker(QThread):
     def run(self):
         """Runs VisionWorker.
 
-        Reads frames, sends them to be displayed, has the MediaPipe node do the inference every
-        stride.
+        Reads frames, sends them to be displayed, enforces playback speed,
+        and has the MediaPipe node do the inference every stride.
         """
         self.playback_start_time = time.time()
+
         while self.running:
             ret, frame = self.camera.read()
             if not ret:
                 continue
 
-            self.frame_ready.emit(frame)
             self.absolute_frame += 1
+            self.frame_count += 1
 
-            # TODO: Prepare frame for MediaPipe???
+            self.frame_ready.emit(frame)
             self.mp_node.receive_frame(frame)
 
+            if self.video_path:
+                target_time = self.playback_start_time + (self.frame_count / self.fps)
+                current_time = time.time()
+                sleep_time_seconds = target_time - current_time
+
+                if sleep_time_seconds > 0:
+                    self.msleep(int(sleep_time_seconds * 1000))
+
             if len(self.mp_node.sliding_window.frames) != self.target_window_width:
-                # sleep to not check every milisecond and take up processor
-                self.msleep(10)
                 continue
 
             self.frames_since_last_predict += 1
@@ -77,20 +84,10 @@ class VisionWorker(QThread):
 
             self.frames_since_last_predict = 0
             window_chunk = self.mp_node.sliding_window.get_window()
-
             window_start = self.absolute_frame - len(window_chunk)
 
             if not self.shared_queue.full():
                 self.shared_queue.put((window_chunk, window_start))
-
-            if self.video_path:
-                target_time = self.playback_start_time + (self.frame_count / self.fps)
-                current_time = time.time()
-
-                sleep_time_seconds = target_time - current_time
-
-                if sleep_time_seconds > 0:
-                    self.msleep(int(sleep_time_seconds * 1000))
 
     def stop(self):
         """Stops the thread."""
@@ -138,7 +135,7 @@ class AIWorker(QThread):
                     print(f"\n--- EMITTING TO UI: {final_sentence} ---\n")
                     self.prediction_ready.emit(final_sentence)
 
-                    with open("prediction_log.txt", "a") as f:
+                    with open("prediction_log.txt", "a", encoding="utf-8") as f:
                         f.write(final_sentence + "\n")
 
     def stop(self):
