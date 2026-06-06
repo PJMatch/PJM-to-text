@@ -4,20 +4,15 @@ training:
   learning_rate: 0.0004
   weight_decay: 0.0001
   grad_clip: 1.0
-  init_weights: null
   deterministic: false
 
 model:
   dropout: 0.2
-  lstm_hidden: 512
-  freeze_backbone: false
-  init_backbone: null
 
 data:
   dataset: "pjm"
-  train_dir: "extracted"
-  dev_dir: "extracted"
-  annotation_dir: "./ann_annotated_glosses"
+  data_dir: "extracted"
+  annotation_dir: "ann_training"
   train_ann: "annotations/PJM_gloss.train.txt"
   dev_ann: "annotations/PJM_gloss.dev.txt"
   num_workers: 8
@@ -38,4 +33,3 @@ logging:
   wandb: false
   log_dir: "runs"
   log_interval: 50
-  histogram_interval: 5
