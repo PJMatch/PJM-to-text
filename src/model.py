@@ -2,7 +2,6 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 from torch.nn.utils.rnn import pack_padded_sequence, pad_packed_sequence
-
 from stgcn.stgcn import STGCNCoSign1s
 
 
@@ -36,7 +35,6 @@ class CoSignTemporalCNN(nn.Module):
         return torch.clamp(out_lengths, min=1)
 
     def forward(self, x, lengths=None):
-        # x: [B, C, T]
         x = self.conv1(x)
         x = self.norm1(x)
         x = self.relu(x)
@@ -71,7 +69,6 @@ class LSTM(nn.Module):
         )
 
     def forward(self, x, lengths=None):
-        # x: [B, C, T] -> [B, T, C]
         x = x.transpose(1, 2)
 
         if lengths is None:
@@ -105,18 +102,6 @@ class SharedGlossHead(nn.Module):
 
 
 class CoSign1SModel(nn.Module):
-    """
-    One-stream CoSign model with complementary masking:
-
-    ST-GCN (with masking & fusion) -> [B, 2, 1024, T]
-        branch 0: phi
-        branch 1: 1 - phi
-
-    For each branch:
-        1D CNN -> aux gloss head (CTC)
-        BiLSTM -> main gloss head (CTC)
-    """
-
     def __init__(
         self,
         num_classes,
@@ -148,47 +133,36 @@ class CoSign1SModel(nn.Module):
         )
 
     def _forward_branch(self, x_branch, lengths):
-        """
-        One complementary branch:
-        x_branch: [B, 1024, T]
-        lengths:  [B]
-        """
         cnn_feat, out_lengths = self.temporal_cnn(x_branch, lengths)
 
         B, C, T_prime = cnn_feat.shape
         device = cnn_feat.device
 
-        time_steps = torch.arange(T_prime, device=device).unsqueeze(0)  # [1, T']
-        length_tensor = out_lengths.unsqueeze(1)  # [B, 1]
+        time_steps = torch.arange(T_prime, device=device).unsqueeze(0)
+        length_tensor = out_lengths.unsqueeze(1)
 
         mask = time_steps < length_tensor
-        mask = mask.unsqueeze(1).expand_as(cnn_feat)  # [B, 1024, T']
+        mask = mask.unsqueeze(1).expand_as(cnn_feat)
 
         cnn_feat = cnn_feat * mask
 
-        aux_feat = cnn_feat.transpose(1, 2)  # [B, T', 1024]
-        aux_logits = self.gloss_head(aux_feat)  # [B, T', V]
+        aux_feat = cnn_feat.transpose(1, 2)
+        aux_logits = self.gloss_head(aux_feat)
 
         lstm_out = self.context_lstm(cnn_feat, out_lengths)
-        main_logits = self.gloss_head(lstm_out)  # [B, T', V]
+        main_logits = self.gloss_head(lstm_out)
 
         return {
-            "cnn_feat": cnn_feat,  # [B, 1024, T']
-            "aux_logits": aux_logits,  # [B, T', V]
-            "main_logits": main_logits,  # [B, T', V]
-            "logit_lengths": out_lengths,  # [B]
+            "cnn_feat": cnn_feat,
+            "aux_logits": aux_logits,
+            "main_logits": main_logits,
+            "logit_lengths": out_lengths,
         }
 
     def forward(self, x, lengths, keep_prob=1):
-        """
-        x:       [B, 3, T, V_total]  (mediapipe skeleton input)
-        lengths: [B]  original sequence lengths
-        keep_prob: masking keep probability
-        Returns a dict with predictions for both complementary branches.
-        """
-        branches = self.STGCN(x, keep_prob=keep_prob)  # [B, 2, 1024, T]
-        branch_phi = branches[:, 0, ...]  # [B, 1024, T]
-        branch_phi_inv = branches[:, 1, ...]  # [B, 1024, T]
+        branches = self.STGCN(x, keep_prob=keep_prob)
+        branch_phi = branches[:, 0, ...]
+        branch_phi_inv = branches[:, 1, ...]
 
         out_phi = self._forward_branch(branch_phi, lengths)
         out_phi_inv = self._forward_branch(branch_phi_inv, lengths)
@@ -199,95 +173,22 @@ class CoSign1SModel(nn.Module):
         }
 
 
-class GlossClassifier(nn.Module):
-    """Perframe gloss classifier: ST-GCN backbone -> TemporalCNN -> BiLSTM -> Linear head."""
-
-    def __init__(self, num_classes, dropout=0.2, lstm_hidden=512, freeze_backbone=False):
-        super().__init__()
-
-        self.STGCN = STGCNCoSign1s()
-
-        self.temporal_cnn = CoSignTemporalCNN(
-            in_dim=1024,
-            hidden_dim=1024,
-            dropout=dropout,
-        )
-
-        self.context_lstm = LSTM(
-            input_dim=1024,
-            hidden_size=lstm_hidden,
-            num_layers=2,
-            dropout=dropout,
-        )
-
-        self.head = nn.Linear(2 * lstm_hidden, num_classes)
-
-        if freeze_backbone:
-            for p in self.STGCN.parameters():
-                p.requires_grad = False
-
-    def forward(self, x, lengths):
-        """x: [B, C, T, V]  lengths: [B]  Returns logits [B, T', V] and output lengths [B]."""
-        branches = self.STGCN(x, keep_prob=1.0)  #[B, 2, 1024, T]
-        feat = branches[:, 0, :, :]  #[B, 1024, T]
-
-        cnn_feat, out_lengths = self.temporal_cnn(feat, lengths)  #[B, 1024, T']
-
-        lstm_out = self.context_lstm(cnn_feat, out_lengths)  #[B, T', 1024]
-
-        logits = self.head(lstm_out)  #[B, T', V]
-
-        return logits, out_lengths
-
-    def load_pretrained(self, checkpoint_path, device):
-        """Load CoSign checkpoint, transferring STGCN/temporal/LSTM weights"""
-        ckpt = torch.load(checkpoint_path, map_location=device, weights_only=False)
-        state = ckpt["model_state_dict"]
-        own_state = self.state_dict()
-
-        key_remap = {}
-        for k in state:
-            if "causal_conv" in k:
-                key_remap[k] = k.replace("causal_conv", "temporal_conv")
-
-        loaded = 0
-        skipped = 0
-        for k, v in state.items():
-            target_k = key_remap.get(k, k)
-            if target_k in own_state and own_state[target_k].shape == v.shape:
-                own_state[target_k] = v
-                loaded += 1
-            else:
-                skipped += 1
-
-        self.load_state_dict(own_state)
-        print(f"Pretrained: {loaded} layers loaded, {skipped} skipped ({len(key_remap)} keys remapped)")
-
-
-if __name__ == "__main__":
-    model = CoSign1SModel(num_classes=1000)
-    x = torch.randn(4, 3, 300, 553)
-    lengths = torch.tensor([300, 250, 200, 150])
-    outputs = model(x, lengths)
-    print(f"phi main: {outputs['phi']['main_logits'].shape}")
-    print(f"phi_inv main: {outputs['phi_inv']['main_logits'].shape}")
-    print(f"aux logit lengths: {outputs['phi']['logit_lengths']}")
-
-
 class AttentivePooling(nn.Module):
+    """Attention pooling over time dimension."""
+
     def __init__(self, feat_dim):
         super().__init__()
         self.score = nn.Linear(feat_dim, 1)
 
     def forward(self, x, lengths):
-        scores = self.score(x).squeeze(-1)  # [B, T]
+        scores = self.score(x).squeeze(-1)  #[B, T]
 
         B, T = scores.shape
         mask = torch.arange(T, device=x.device).unsqueeze(0) < lengths.unsqueeze(1)
         scores[~mask] = float("-inf")
 
-        weights = F.softmax(scores, dim=-1).unsqueeze(-1)  # [B, T, 1]
-        pooled = (x * weights).sum(dim=1)  # [B, D]
+        weights = F.softmax(scores, dim=-1).unsqueeze(-1)  #[B, T, 1]
+        pooled = (x * weights).sum(dim=1)  #[B, D]
         return pooled
 
 
@@ -302,10 +203,10 @@ class GlossClassifier(nn.Module):
         self.head = nn.Linear(1024, num_classes)
 
     def forward(self, x, lengths):
-        branches = self.STGCN(x, keep_prob=1.0)  # [B, 2, 1024, T]
-        feat = branches[:, 0, :, :]  # [B, 1024, T]
-        feat = feat.transpose(1, 2)  # [B, T, 1024]
+        branches = self.STGCN(x, keep_prob=1.0)  #[B, 2, 1024, T]
+        feat = branches[:, 0, :, :]  #[B, 1024, T]
+        feat = feat.transpose(1, 2)  #[B, T, 1024]
 
-        pooled = self.pool(feat, lengths)  # [B, 1024]
-        logits = self.head(pooled)  # [B, V]
+        pooled = self.pool(feat, lengths)  #[B, 1024]
+        logits = self.head(pooled)  #[B, V]
         return logits

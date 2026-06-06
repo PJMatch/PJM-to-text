@@ -1,4 +1,4 @@
-"""Build file-level train/dev split files from per-gloss segmented annotations."""
+"""Build train/dev split files from per-gloss segmented annotations."""
 
 import json
 import os
@@ -17,23 +17,10 @@ def load_config():
     return config["data"]
 
 
-def main():
-    cfg = load_config()
-    base = Path(__file__).parent
-    ann_dir = cfg["annotation_dir"]
-    train_out = base / "annotations" / "PJM_gloss.train.txt"
-    dev_out = base / "annotations" / "PJM_gloss.dev.txt"
 
-    min_sentences = cfg["min_sentences"]
-    dev_ratio = 1.0 - cfg["train_ratio"]
-    seed = cfg.get("seed", 42)
-    random.seed(seed)
-
-    gloss_sids = defaultdict(set)
-    sid_stems = defaultdict(set)
-    stem_sid = {}
-    stem_segments = defaultdict(list)
-
+def collect_segments(ann_dir):
+    """Return dict: gloss -> list of (sentence_id, stem, start_frame)."""
+    gloss_segments = defaultdict(list)
     for fname in os.listdir(ann_dir):
         with open(os.path.join(ann_dir, fname)) as f:
             data = json.load(f)
@@ -41,71 +28,100 @@ def main():
         glosses = data.get("glosses", [])
         if not glosses or not isinstance(glosses[0], list):
             continue
-        if not any(g == "EoR" for g, _ in glosses):
+
+        has_eor = any(g == "EoR" for g, _ in glosses)
+        if not has_eor:
             continue
 
         parts = fname.replace(".json", "").split("_")
-        sid = parts[1]
+        sentence_id = parts[1]
         stem = fname.replace(".json", "")
-        stem_sid[stem] = sid
-        sid_stems[sid].add(stem)
 
-        for gloss, start in glosses:
+        for gloss, start_frame in glosses:
             if gloss == "EoR":
                 continue
-            gloss_sids[gloss].add(sid)
-            stem_segments[stem].append((gloss, start))
 
-    dev_sids = set()
-    splittable = {g for g, sids in gloss_sids.items() if len(sids) >= min_sentences}
+            gloss_segments[gloss].append((sentence_id, stem, start_frame))
 
-    for gloss in sorted(splittable):
-        sids = sorted(gloss_sids[gloss])
-        random.shuffle(sids)
-        n_dev = max(1, round(len(sids) * dev_ratio))
-        for sid in sids[:n_dev]:
-            dev_sids.add(sid)
+    return gloss_segments
 
-    for gloss, sids in gloss_sids.items():
-        if sids.issubset(dev_sids):
-            moved = random.choice(sorted(sids))
-            dev_sids.discard(moved)
 
-    train_files = []
-    dev_files = []
-    train_seg = 0
-    dev_seg = 0
+def build_splits(gloss_segments, min_sentences, train_ratio, seed):
+    """Split per gloss by sentence_id. Returns (train_lines, dev_lines)."""
+    random.seed(seed)
+    train_lines = []
+    dev_lines = []
+    train_count = 0
+    dev_count = 0
     dev_glosses = set()
-    train_glosses = set()
 
-    for stem in sorted(stem_segments.keys()):
-        sid = stem_sid[stem]
-        if sid in dev_sids:
-            dev_files.append(f"{stem}.npy")
-            dev_seg += len(stem_segments[stem])
-            for g, _ in stem_segments[stem]:
-                dev_glosses.add(g)
-        else:
-            train_files.append(f"{stem}.npy")
-            train_seg += len(stem_segments[stem])
-            for g, _ in stem_segments[stem]:
-                train_glosses.add(g)
+    for gloss, segments in sorted(gloss_segments.items()):
+        sid_to_segments = defaultdict(list)
+        for sid, stem, start in segments:
+            sid_to_segments[sid].append((stem, start))
 
-    os.makedirs(train_out.parent, exist_ok=True)
+        unique_sids = sorted(sid_to_segments.keys())
 
-    with open(train_out, "w") as f:
-        f.write("\n".join(train_files) + "\n")
+        if len(unique_sids) < min_sentences:
+            for sid, segs in sid_to_segments.items():
+                for stem, start in segs:
+                    train_lines.append(f"{stem}.npy,{start},{gloss}")
+                    train_count += 1
+            continue
 
-    with open(dev_out, "w") as f:
-        f.write("\n".join(dev_files) + "\n")
+        shuffled = list(unique_sids)
+        random.shuffle(shuffled)
 
-    total_files = len(train_files) + len(dev_files)
-    print(f"Files:    {len(train_files)} train / {len(dev_files)} dev ({len(dev_files)/total_files*100:.1f}%)")
-    print(f"Segments: {train_seg} train / {dev_seg} dev ({dev_seg/(train_seg+dev_seg)*100:.1f}%)")
-    print(f"Glosses:  {len(gloss_sids)} total / {len(splittable)} splittable / {len(dev_glosses & train_glosses)} in both")
-    dev_only = dev_glosses - train_glosses
-    if dev_only:
-        print(f"Dev-only glosses (bad): {list(dev_only)}")
+        n_train = max(1, round(len(shuffled) * train_ratio))
+        n_dev = len(shuffled) - n_train
+        n_dev = max(1, n_dev)
+        n_train = len(shuffled) - n_dev
+
+        train_sids = set(shuffled[:n_train])
+        dev_sids = set(shuffled[n_train:])
+
+        for sid, segs in sid_to_segments.items():
+            for stem, start in segs:
+                if sid in train_sids:
+                    train_lines.append(f"{stem}.npy,{start},{gloss}")
+                    train_count += 1
+                else:
+                    dev_lines.append(f"{stem}.npy,{start},{gloss}")
+                    dev_count += 1
+                    dev_glosses.add(gloss)
+
+    return train_lines, dev_lines, train_count, dev_count, dev_glosses
+
+
+def main():
+    cfg = load_config()
+    base = Path(__file__).parent
+
+    ann_dir = cfg["annotation_dir"] 
+    train_path = base / "annotations" / "PJM_gloss.train.txt"
+    dev_path = base / "annotations" / "PJM_gloss.dev.txt"
+
+    gloss_segments = collect_segments(ann_dir)
+    train_lines, dev_lines, train_count, dev_count, dev_glosses = build_splits(
+        gloss_segments,
+        cfg["min_sentences"],
+        cfg["train_ratio"],
+        seed=cfg.get("seed", 42),
+    )
+
+    os.makedirs(train_path.parent, exist_ok=True)
+
+    with open(train_path, "w") as f:
+        f.write("\n".join(train_lines) + "\n")
+
+    with open(dev_path, "w") as f:
+        f.write("\n".join(dev_lines) + "\n")
+
+    total = train_count + dev_count
+    print(f"Segments: {train_count} train / {dev_count} dev ({dev_count/total*100:.1f}% dev)")
+    print(f"Glosses: {len(gloss_segments)} total, {len(dev_glosses)} in dev")
+    print(f"Train file: {train_path}")
+    print(f"Dev file:   {dev_path}")
 
 
 if __name__ == "__main__":
