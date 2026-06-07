@@ -4,6 +4,7 @@ from collections import defaultdict
 import torch
 import yaml
 from torch.utils.data import DataLoader
+from tqdm import tqdm
 
 from model import GlossClassifier
 from pjm_dataloader import PJMDataset, build_gloss_vocab, collate_fn
@@ -23,6 +24,7 @@ def main():
         if torch.cuda.is_available()
         else "cpu"
     )
+    print(f"Device: {device}")
 
     ckpt_path = os.path.join(config["system"]["checkpoint_dir"], "latest.pth")
     if os.path.exists(ckpt_path):
@@ -36,6 +38,7 @@ def main():
 
     gloss2id = build_gloss_vocab(ANN_DIR, [ANN_TRAIN, ANN_DEV])
     id2gloss = {v: k for k, v in gloss2id.items()}
+    print(f"Vocab size: {len(gloss2id)}")
 
     dataset = PJMDataset(
         config["data"]["data_dir"],
@@ -43,6 +46,7 @@ def main():
         ANN_DEV,
         gloss2id,
     )
+    print(f"Dev samples: {len(dataset)}")
 
     dataloader = DataLoader(
         dataset,
@@ -61,7 +65,7 @@ def main():
     per_gloss_total = defaultdict(int)
 
     with torch.no_grad():
-        for frames, labels, lengths in dataloader:
+        for frames, labels, lengths in tqdm(dataloader, desc="Inference"):
             frames = frames.permute(0, 3, 1, 2).to(device)
             labels = labels.to(device)
             lengths = lengths.to(device)
