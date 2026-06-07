@@ -15,6 +15,7 @@ TOTAL_V = POSE_LEN + FACE_LEN + LH_LEN + RH_LEN
 
 
 def _safe_part(raw, expected_len):
+    "Sanitize data from mediapipe to a constant shape of (expected_len, 4) [x, y, z, confidence]."
     arr = np.array(raw, dtype=np.float32) if len(raw) > 0 else np.zeros((0, 4), dtype=np.float32)
     arr = arr.reshape(-1, 4)
     if arr.shape[0] == 0:
