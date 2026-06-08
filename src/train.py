@@ -91,6 +91,17 @@ def load_checkpoint(filepath, model, optimizer, device):
     return epoch, model, optimizer
 
 
+def try_resume_checkpoint(filepath, model, optimizer, device):
+    """Resume training only when the checkpoint matches the current model."""
+    try:
+        return load_checkpoint(filepath, model, optimizer, device)
+    except (KeyError, RuntimeError, ValueError) as exc:
+        print(f"Skipping incompatible checkpoint '{filepath}'.")
+        print(f"Reason: {exc}")
+        print("Starting training from scratch.")
+        return 0, model, optimizer
+
+
 def evaluate(model, dataloader, criterion, device, id2gloss=None):
     model.eval()
     total_loss = 0.0
@@ -251,7 +262,7 @@ def main():
     start_epoch = 0
     latest_ckpt = os.path.join(CHECKPOINT_DIR, "latest.pth")
     if os.path.exists(latest_ckpt):
-        start_epoch, _, _ = load_checkpoint(latest_ckpt, model, optimizer, DEVICE)
+        start_epoch, _, _ = try_resume_checkpoint(latest_ckpt, model, optimizer, DEVICE)
 
     best_acc = 0.0
     global_step = 0
