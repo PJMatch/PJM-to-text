@@ -11,10 +11,10 @@ model:
 
 data:
   dataset: "pjm"
-  data_dir: "extracted"
-  annotation_dir: "ann_training"
-  train_ann: "annotations/PJM_gloss.train.txt"
-  dev_ann: "annotations/PJM_gloss.dev.txt"
+  data_dir: "pjm/extracted"
+  annotation_dir: "pjm/ann_training"
+  train_ann: "pjm/annotations/PJM_gloss.train.txt"
+  dev_ann: "pjm/annotations/PJM_gloss.dev.txt"
   num_workers: 8
   pin_memory: true
   min_sentences: 4
@@ -25,7 +25,7 @@ optimizer:
   gamma: 0.1
 
 system:
-  checkpoint_dir: "checkpoints"
+  checkpoint_dir: "pjm/checkpoints"
   device: "auto"
 
 logging:
