@@ -2,6 +2,7 @@ import numpy as np
 import torch
 from dataset_preprocess import (
     BLANK_GLOSS,
+    END_OF_VIDEO,
     build_samples,
     load_gloss_map,
     map_gloss,
@@ -103,6 +104,8 @@ class PJMDataset(Dataset):
         raw = self._load_raw_video(stem)
         if raw is None:
             raise FileNotFoundError(f"No video file found for stem '{stem}' in {self.data_dir}")
+        if end == END_OF_VIDEO:
+            end = len(raw)
         frames = np.stack([_convert_frame(f) for f in raw[start:end]])  #[T, 553, 3]
         clip = torch.tensor(frames, dtype=torch.float32)  #[T, 553, 3]
 

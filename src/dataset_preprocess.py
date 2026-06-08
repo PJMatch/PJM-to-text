@@ -30,6 +30,9 @@ def map_gloss(gloss_name, gloss_map):
     return gloss_map.get(gloss_name, gloss_name)
 
 
+END_OF_VIDEO = -1
+
+
 class VideoCache:
     """Lazy in-memory cache for raw .npy videos."""
 
@@ -74,6 +77,9 @@ def load_split_segments(split_file):
 def load_timestamped_segments(annotation_dir, stem):
     """Return list of (gloss, start) and the EoR frame for one annotation file."""
     json_path = Path(annotation_dir) / f"{stem}.json"
+    if not json_path.exists():
+        return [], None
+
     with open(json_path, encoding="utf-8") as f:
         data = json.load(f)
 
@@ -105,8 +111,12 @@ def build_samples(
     video_cache = VideoCache(data_dir, enabled=cache_videos)
     samples = []
     stem_segments = load_split_segments(split_file)
+    total_stems = len(stem_segments)
 
-    for stem, segs in stem_segments.items():
+    for idx, (stem, segs) in enumerate(stem_segments.items(), start=1):
+        if idx == 1 or idx % 500 == 0 or idx == total_stems:
+            print(f"  preprocessing stems: {idx}/{total_stems}", flush=True)
+
         entries, eor = load_timestamped_segments(annotation_dir, stem)
         if not entries:
             continue
@@ -123,10 +133,8 @@ def build_samples(
                 elif eor is not None and eor > 0:
                     samples.append((stem, 0, eor, blank_gid))
 
-                raw = video_cache.load(stem)
-                video_len = len(raw) if raw is not None else None
-                if eor is not None and video_len is not None and video_len > eor:
-                    samples.append((stem, eor, video_len, blank_gid))
+                if eor is not None:
+                    samples.append((stem, eor, END_OF_VIDEO, blank_gid))
 
         seg_map = {}
         for i, (gloss, start) in enumerate(entries):
@@ -143,4 +151,5 @@ def build_samples(
                 if gid is not None:
                     samples.append((stem, start, end, gid))
 
+    print(f"  built {len(samples)} samples (cached videos: {len(video_cache.cache)})", flush=True)
     return samples, video_cache

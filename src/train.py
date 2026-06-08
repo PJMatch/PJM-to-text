@@ -221,7 +221,9 @@ def main():
 
     print("Loading datasets")
     train_dataset = PJMDataset(DATA_DIR, ANN_DIR, ANN_TRAIN, gloss2id)
+    print(f"  train samples: {len(train_dataset)}")
     dev_dataset = PJMDataset(DATA_DIR, ANN_DIR, ANN_DEV, gloss2id)
+    print(f"  dev samples: {len(dev_dataset)}")
 
     g = torch.Generator()
     g.manual_seed(SEED)
