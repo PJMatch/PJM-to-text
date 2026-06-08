@@ -1,5 +1,5 @@
 import os
-from collections import defaultdict
+from collections import Counter, defaultdict
 
 import torch
 import yaml
@@ -63,6 +63,7 @@ def main():
     total = 0
     per_gloss_correct = defaultdict(int)
     per_gloss_total = defaultdict(int)
+    per_gloss_mispred = defaultdict(Counter)
 
     with torch.no_grad():
         for frames, labels, lengths in tqdm(dataloader, desc="Inference"):
@@ -80,15 +81,20 @@ def main():
                 per_gloss_total[label] += 1
                 if pred == label:
                     per_gloss_correct[label] += 1
+                else:
+                    per_gloss_mispred[label][pred] += 1
 
     print(f"Overall: {correct}/{total} = {correct / total:.2%}\n")
-    print(f"{'Gloss':<20} {'Correct':>8} {'Total':>8} {'Rate':>8}")
-    print("-" * 48)
+    print(f"{'Gloss':<20} {'Correct':>8} {'Total':>8} {'Rate':>8}  Top confusion")
+    print("-" * 62)
     for gid in sorted(per_gloss_total.keys(), key=lambda g: per_gloss_correct[g] / max(per_gloss_total[g], 1)):
         c = per_gloss_correct[gid]
         t = per_gloss_total[gid]
         name = id2gloss[gid]
-        print(f"{name:<20} {c:>8} {t:>8} {c / t:>7.1%}")
+        top = per_gloss_mispred[gid].most_common(1)
+        confused = id2gloss[top[0][0]] if top else "-"
+        confused_n = top[0][1] if top else 0
+        print(f"{name:<20} {c:>8} {t:>8} {c / t:>7.1%}  {confused:<15} ({confused_n}/{t})")
 
 
 if __name__ == "__main__":
