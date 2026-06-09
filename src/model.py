@@ -103,6 +103,17 @@ class SharedGlossHead(nn.Module):
 
 
 class CoSign1SModel(nn.Module):
+    """
+    One-stream CoSign model with complementary masking:
+
+    ST-GCN (with masking & fusion) -> [B, 2, 1024, T]
+        branch 0: phi
+        branch 1: 1 - phi
+
+    For each branch:
+        1D CNN -> aux gloss head (CTC)
+        BiLSTM -> main gloss head (CTC)
+    """
 
     def __init__(
         self,
@@ -135,6 +146,11 @@ class CoSign1SModel(nn.Module):
         )
 
     def _forward_branch(self, x_branch, lengths):
+        """
+        One complementary branch:
+        x_branch: [B, 1024, T]
+        lengths:  [B]
+        """
         cnn_feat, out_lengths = self.temporal_cnn(x_branch, lengths)
 
         B, C, T_prime = cnn_feat.shape

@@ -7,7 +7,7 @@ from torch.utils.data import DataLoader
 from tqdm import tqdm
 
 from model import GlossClassifier
-from pjm_dataloader import PJMDataset, collate_fn
+from pjm_dataloader_islr import PJMDataset, collate_fn
 
 
 def load_config(config_path="config.yaml"):

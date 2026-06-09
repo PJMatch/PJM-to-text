@@ -19,7 +19,7 @@ except ImportError:
     WANDB_AVAILABLE = False
 
 from model import GlossClassifier
-from pjm_dataloader import PJMDataset, build_gloss_vocab, collate_fn
+from pjm_dataloader_islr import PJMDataset, build_gloss_vocab, collate_fn
 
 
 def parse_args():
