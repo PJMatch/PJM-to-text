@@ -195,6 +195,9 @@ def main():
     ANN_TRAIN = config["data"]["train_ann"]
     ANN_DEV = config["data"]["dev_ann"]
     NUM_WORKERS = config["data"]["num_workers"]
+    DEV_NUM_WORKERS = config["data"].get("dev_num_workers", NUM_WORKERS)
+    WARMUP_CACHE = config["data"].get("warmup_cache", True)
+    DEV_CACHE_VIDEOS = config["data"].get("dev_cache_videos", False)
     PIN_MEMORY = config["data"]["pin_memory"]
 
     OPTIMIZER_MILESTONES = config["optimizer"]["milestones"]
@@ -220,9 +223,23 @@ def main():
     print(f"Vocab size: {num_classes}")
 
     print("Loading datasets")
-    train_dataset = PJMDataset(DATA_DIR, ANN_DIR, ANN_TRAIN, gloss2id)
+    train_dataset = PJMDataset(
+        DATA_DIR,
+        ANN_DIR,
+        ANN_TRAIN,
+        gloss2id,
+        cache_videos=True,
+        warmup_cache=WARMUP_CACHE,
+    )
     print(f"  train samples: {len(train_dataset)}")
-    dev_dataset = PJMDataset(DATA_DIR, ANN_DIR, ANN_DEV, gloss2id)
+    dev_dataset = PJMDataset(
+        DATA_DIR,
+        ANN_DIR,
+        ANN_DEV,
+        gloss2id,
+        cache_videos=DEV_CACHE_VIDEOS,
+        warmup_cache=False,
+    )
     print(f"  dev samples: {len(dev_dataset)}")
 
     g = torch.Generator()
@@ -243,7 +260,7 @@ def main():
         batch_size=BATCH_SIZE,
         shuffle=False,
         collate_fn=collate_fn,
-        num_workers=NUM_WORKERS,
+        num_workers=DEV_NUM_WORKERS,
         pin_memory=PIN_MEMORY,
         worker_init_fn=seed_worker,
     )

@@ -1,6 +1,6 @@
 training:
   epochs: 40
-  batch_size: 64
+  batch_size: 256
   learning_rate: 0.0004
   weight_decay: 0.0001
   grad_clip: 1.0
@@ -16,6 +16,9 @@ data:
   train_ann: "annotations/PJM_gloss.train.txt"
   dev_ann: "annotations/PJM_gloss.dev.txt"
   num_workers: 8
+  dev_num_workers: 4
+  warmup_cache: true
+  dev_cache_videos: false
   pin_memory: true
   min_sentences: 4
   train_ratio: 0.75

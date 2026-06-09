@@ -6,6 +6,7 @@ from dataset_preprocess import (
     build_samples,
     load_gloss_map,
     map_gloss,
+    unique_stems,
 )
 from torch.nn.utils.rnn import pad_sequence
 from torch.utils.data import Dataset
@@ -80,6 +81,7 @@ class PJMDataset(Dataset):
         gloss_map_path=None,
         add_blank_segments=True,
         cache_videos=True,
+        warmup_cache=False,
     ):
         self.samples, self.video_cache = build_samples(
             data_dir=data_dir,
@@ -91,6 +93,11 @@ class PJMDataset(Dataset):
             cache_videos=cache_videos,
         )
         self.data_dir = self.video_cache.data_dir
+
+        if warmup_cache and cache_videos:
+            stems = unique_stems(self.samples)
+            print(f"  warming cache for {len(stems)} unique videos...", flush=True)
+            self.video_cache.warmup(stems)
 
     def __len__(self):
         return len(self.samples)

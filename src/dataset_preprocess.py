@@ -34,16 +34,17 @@ END_OF_VIDEO = -1
 
 
 class VideoCache:
-    """Lazy in-memory cache for raw .npy videos."""
+    """In-memory cache for raw .npy videos with optional main-process warmup."""
 
     def __init__(self, data_dir, enabled=True):
         self.data_dir = Path(data_dir)
         self.enabled = enabled
         self.cache = {}
+        self.frozen = False
 
     def load(self, stem):
-        """Load a raw video by stem and keep it in RAM when caching is enabled."""
-        if self.enabled and stem in self.cache:
+        """Load a raw video by stem. Writes to cache only before freeze()."""
+        if stem in self.cache:
             return self.cache[stem]
 
         npy_path = self.data_dir / f"{stem}.npy"
@@ -51,9 +52,32 @@ class VideoCache:
             return None
 
         raw = np.load(npy_path, allow_pickle=True)
-        if self.enabled:
+        if self.enabled and not self.frozen:
             self.cache[stem] = raw
         return raw
+
+    def warmup(self, stems):
+        """Preload all stems in the main process, then freeze for forked workers."""
+        if not self.enabled:
+            return
+
+        stems = sorted(stems)
+        total = len(stems)
+        for idx, stem in enumerate(stems, start=1):
+            if idx == 1 or idx % 500 == 0 or idx == total:
+                print(f"  warming cache: {idx}/{total}", flush=True)
+            self.load(stem)
+
+        self.frozen = True
+        print(
+            f"  cache ready: {len(self.cache)} videos (frozen, read-only for workers)",
+            flush=True,
+        )
+
+
+def unique_stems(samples):
+    """Return sorted unique video stems referenced by dataset samples."""
+    return sorted({stem for stem, _, _, _ in samples})
 
 
 def load_split_segments(split_file):
