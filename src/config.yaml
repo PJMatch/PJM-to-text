@@ -22,6 +22,7 @@ data:
   dev_cache_videos: false
   pin_memory: true
   mirror_prob: 0.5
+  temporal_scale: true
   min_sentences: 4
   train_ratio: 0.75
 

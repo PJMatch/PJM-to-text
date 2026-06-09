@@ -201,6 +201,7 @@ def main():
     DEV_CACHE_VIDEOS = config["data"].get("dev_cache_videos", False)
     PIN_MEMORY = config["data"]["pin_memory"]
     MIRROR_PROB = config["data"].get("mirror_prob", 0.5)
+    TEMPORAL_SCALE = config["data"].get("temporal_scale", True)
 
     OPTIMIZER_MILESTONES = config["optimizer"]["milestones"]
     OPTIMIZER_GAMMA = float(config["optimizer"]["gamma"])
@@ -237,6 +238,7 @@ def main():
         cache_videos=CACHE_VIDEOS,
         warmup_cache=WARMUP_CACHE,
         mirror_prob=MIRROR_PROB,
+        temporal_scale=TEMPORAL_SCALE,
     )
     print(f"  train samples: {len(train_dataset)}")
     dev_dataset = PJMDataset(

@@ -1,5 +1,8 @@
+import random
+
 import numpy as np
 import torch
+import torch.nn.functional as F
 from dataset_preprocess import (
     BLANK_GLOSS,
     END_OF_VIDEO,
@@ -53,6 +56,18 @@ def mirror_clip(clip):
     return flipped
 
 
+def temporal_scale_clip(clip, scale_range=(0.8, 1.2), min_frames=4):
+    """Stretch or compress clip along time axis via linear interpolation."""
+    T, V, C = clip.shape
+    scale = random.uniform(*scale_range)
+    new_T = max(int(round(T * scale)), min_frames)
+    if new_T == T:
+        return clip
+    x = clip.reshape(T, V * C).T.unsqueeze(0)  #[1, V*C, T]
+    x = F.interpolate(x, size=new_T, mode="linear", align_corners=False)
+    return x.squeeze(0).T.reshape(new_T, V, C)  #[new_T, V, C]
+
+
 def build_gloss_vocab(annotation_dir, split_files, gloss_map_path=None, include_blank=True):
     """Build gloss2id from segmented annotations."""
     glosses = set()
@@ -97,8 +112,12 @@ class PJMDataset(Dataset):
         cache_videos=True,
         warmup_cache=False,
         mirror_prob=0.0,
+        temporal_scale=False,
+        temporal_scale_range=(0.8, 1.2),
     ):
         self.mirror_prob = mirror_prob
+        self.temporal_scale = temporal_scale
+        self.temporal_scale_range = temporal_scale_range
         self.samples, self.video_cache = build_samples(
             data_dir=data_dir,
             annotation_dir=annotation_dir,
@@ -132,6 +151,9 @@ class PJMDataset(Dataset):
             end = len(raw)
         frames = np.stack([_convert_frame(f) for f in raw[start:end]])  #[T, 553, 3]
         clip = torch.tensor(frames, dtype=torch.float32)  #[T, 553, 3]
+
+        if self.temporal_scale and gloss_id != self.blank_id:
+            clip = temporal_scale_clip(clip, self.temporal_scale_range)
 
         if gloss_id != self.blank_id and torch.rand(1).item() < self.mirror_prob:
             clip = mirror_clip(clip)
