@@ -16,6 +16,8 @@ FACE_LEN = 478
 LH_LEN = 21
 RH_LEN = 21
 TOTAL_V = POSE_LEN + FACE_LEN + LH_LEN + RH_LEN
+LH_START = POSE_LEN + FACE_LEN
+RH_START = POSE_LEN + FACE_LEN + LH_LEN
 
 
 def _safe_part(raw, expected_len):
@@ -37,6 +39,18 @@ def _convert_frame(frame_dict):
     rh = _safe_part(frame_dict.get("rh", []), RH_LEN)
     combined = np.concatenate([pose, face, lh, rh], axis=0)
     return combined[:, [0, 1, 3]]
+
+
+def mirror_clip(clip):
+    """Swap hands and reflect x for body and hands. Face is untouched."""
+    flipped = clip.clone()  #[T, 553, 3]
+    flipped[:, LH_START:RH_START], flipped[:, RH_START:RH_START + RH_LEN] = (
+        clip[:, RH_START:RH_START + RH_LEN].clone(),
+        clip[:, LH_START:RH_START].clone(),
+    )
+    flipped[:, :POSE_LEN, 0] = 1.0 - flipped[:, :POSE_LEN, 0]
+    flipped[:, LH_START:RH_START + RH_LEN, 0] = 1.0 - flipped[:, LH_START:RH_START + RH_LEN, 0]
+    return flipped
 
 
 def build_gloss_vocab(annotation_dir, split_files, gloss_map_path=None, include_blank=True):
@@ -82,7 +96,9 @@ class PJMDataset(Dataset):
         add_blank_segments=True,
         cache_videos=True,
         warmup_cache=False,
+        mirror_prob=0.0,
     ):
+        self.mirror_prob = mirror_prob
         self.samples, self.video_cache = build_samples(
             data_dir=data_dir,
             annotation_dir=annotation_dir,
@@ -93,6 +109,7 @@ class PJMDataset(Dataset):
             cache_videos=cache_videos,
         )
         self.data_dir = self.video_cache.data_dir
+        self.blank_id = gloss2id.get(BLANK_GLOSS, -1)
 
         if warmup_cache and cache_videos:
             stems = unique_stems(self.samples)
@@ -115,6 +132,9 @@ class PJMDataset(Dataset):
             end = len(raw)
         frames = np.stack([_convert_frame(f) for f in raw[start:end]])  #[T, 553, 3]
         clip = torch.tensor(frames, dtype=torch.float32)  #[T, 553, 3]
+
+        if gloss_id != self.blank_id and torch.rand(1).item() < self.mirror_prob:
+            clip = mirror_clip(clip)
 
         return clip, gloss_id, clip.shape[0]
 

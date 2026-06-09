@@ -200,6 +200,7 @@ def main():
     WARMUP_CACHE = config["data"].get("warmup_cache", False) and CACHE_VIDEOS
     DEV_CACHE_VIDEOS = config["data"].get("dev_cache_videos", False)
     PIN_MEMORY = config["data"]["pin_memory"]
+    MIRROR_PROB = config["data"].get("mirror_prob", 0.5)
 
     OPTIMIZER_MILESTONES = config["optimizer"]["milestones"]
     OPTIMIZER_GAMMA = float(config["optimizer"]["gamma"])
@@ -235,6 +236,7 @@ def main():
         gloss2id,
         cache_videos=CACHE_VIDEOS,
         warmup_cache=WARMUP_CACHE,
+        mirror_prob=MIRROR_PROB,
     )
     print(f"  train samples: {len(train_dataset)}")
     dev_dataset = PJMDataset(
