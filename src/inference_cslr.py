@@ -112,7 +112,7 @@ def main():
     annotation_dir = config["data"]["annotation_dir"]
     print("Loading PJM dev dataset")
     test_dataset = PJMDataset(
-        data_dir=config["data"]["dev_dir"],
+        data_dir=config["data"]["data_dir"],
         annotation_dir=annotation_dir,
         split_file=config["data"]["dev_ann"],
         gloss2id=gloss2id,

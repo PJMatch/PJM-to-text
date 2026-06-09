@@ -22,11 +22,6 @@ except ImportError:
     WANDB_AVAILABLE = False
 
 from model import CoSign1SModel
-from phoenix_dataloader import (
-    PhoenixDataset,
-    build_gloss_vocab as build_phoenix_vocab,
-    phoenix_ctc_collate_fn,
-)
 from pjm_dataloader_cslr import PJMDataset, build_gloss_vocab as build_pjm_vocab, pjm_ctc_collate_fn
 
 
@@ -122,8 +117,8 @@ BATCH_SIZE = config["training"]["batch_size"]
 LEARNING_RATE = float(config["training"]["learning_rate"])
 WEIGHT_DECAY = float(config["training"]["weight_decay"])
 GRAD_CLIP = float(config["training"]["grad_clip"])
-KL_WEIGHT = float(config["training"]["kl_weight"])
-MIRROR_DATA = config["training"]["mirror_data"]
+KL_WEIGHT = float(config["training"].get("kl_weight", 0.0))
+MIRROR_DATA = config["training"].get("mirror_data", False)
 KEEP_PROB = config["training"].get("keep_prob", 0.8)
 INIT_WEIGHTS = config["training"].get("init_weights", None)
 KL_WARMUP_START = config["training"].get("kl_warmup_start", 5)
@@ -135,8 +130,7 @@ else:
     DEVICE = torch.device(config["system"]["device"])
 
 CHECKPOINT_DIR = config["system"]["checkpoint_dir"]
-DATA_DIR_TRAIN = config["data"]["train_dir"]
-DATA_DIR_DEV = config["data"]["dev_dir"]
+DATA_DIR = config["data"]["data_dir"]
 ANN_TRAIN = config["data"]["train_ann"]
 ANN_DEV = config["data"]["dev_ann"]
 NUM_WORKERS = config["data"]["num_workers"]
@@ -417,25 +411,14 @@ def main():
         wandb.init(project="cosign-sign-language", name=run_id, config=config, dir=LOG_DIR)
 
     print("Building vocabulary")
-    dataset_type = config.get("data", {}).get("dataset", "phoenix")
+    annotation_dir = config["data"]["annotation_dir"]
+    gloss2id, id2gloss = build_pjm_vocab(annotation_dir, [ANN_TRAIN, ANN_DEV])
+    num_classes = len(gloss2id)
 
-    if dataset_type == "pjm":
-        annotation_dir = config["data"]["annotation_dir"]
-        gloss2id, id2gloss = build_pjm_vocab(annotation_dir, [ANN_TRAIN, ANN_DEV])
-        num_classes = len(gloss2id)
-
-        print("Loading PJM datasets")
-        train_dataset = PJMDataset(DATA_DIR_TRAIN, annotation_dir, ANN_TRAIN, gloss2id)
-        dev_dataset = PJMDataset(DATA_DIR_DEV, annotation_dir, ANN_DEV, gloss2id, split="test")
-        collate_fn = pjm_ctc_collate_fn
-    else:
-        gloss2id, id2gloss = build_phoenix_vocab([ANN_TRAIN, ANN_DEV])
-        num_classes = len(gloss2id)
-
-        print("Loading Phoenix datasets")
-        train_dataset = PhoenixDataset(DATA_DIR_TRAIN, ANN_TRAIN, gloss2id)
-        dev_dataset = PhoenixDataset(DATA_DIR_DEV, ANN_DEV, gloss2id)
-        collate_fn = phoenix_ctc_collate_fn
+    print("Loading PJM datasets")
+    train_dataset = PJMDataset(DATA_DIR, annotation_dir, ANN_TRAIN, gloss2id)
+    dev_dataset = PJMDataset(DATA_DIR, annotation_dir, ANN_DEV, gloss2id, split="test")
+    collate_fn = pjm_ctc_collate_fn
 
     g = torch.Generator()
     g.manual_seed(SEED)

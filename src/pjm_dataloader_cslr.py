@@ -8,8 +8,6 @@ import torch.nn.functional as F
 from torch.nn.utils.rnn import pad_sequence
 from torch.utils.data import Dataset
 
-from phoenix_dataloader import random_temporal_scaling
-
 POSE_LEN = 33
 FACE_LEN = 478
 LH_LEN = 21
@@ -23,7 +21,7 @@ def load_pjm_annotations(annotation_dir: str, split_file: str):
 
     with open(split_file, "r", encoding="utf-8") as f:
         for line in f:
-            stem = line.strip().replace(".npy", "")
+            stem = line.strip().split(",")[0].replace(".npy", "")
             if not stem:
                 continue
 
@@ -34,7 +32,15 @@ def load_pjm_annotations(annotation_dir: str, split_file: str):
             with open(json_path, "r", encoding="utf-8") as jf:
                 data = json.load(jf)
 
-            gloss_tokens = data.get("glosses", [])
+            raw_glosses = data.get("glosses", [])
+            if not raw_glosses:
+                continue
+
+            if isinstance(raw_glosses[0], list):
+                gloss_tokens = [g for g, _ in raw_glosses if g != "EoR"]
+            else:
+                gloss_tokens = raw_glosses
+
             if not gloss_tokens:
                 continue
 
@@ -87,6 +93,18 @@ def _load_pjm_sequence(file_path):
     raw = np.load(file_path, allow_pickle=True)
     frames = np.stack([_convert_pjm_frame(f) for f in raw])
     return torch.tensor(frames, dtype=torch.float32)
+
+
+def random_temporal_scaling(frames, scale_range=(0.8, 1.2), min_frames=4):
+    scale_factor = random.uniform(*scale_range)
+    T, V, C = frames.shape
+    new_T = max(int(round(T * scale_factor)), min_frames)
+    if new_T == T:
+        return frames
+    x = frames.reshape(T, V * C).transpose(0, 1).unsqueeze(0)
+    x = F.interpolate(x, size=new_T, mode="linear", align_corners=False)
+    x = x.squeeze(0).transpose(0, 1).reshape(new_T, V, C)
+    return x
 
 
 class PJMDataset(Dataset):
