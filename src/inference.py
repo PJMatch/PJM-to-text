@@ -7,7 +7,7 @@ from torch.utils.data import DataLoader
 from tqdm import tqdm
 
 from model import GlossClassifier
-from pjm_dataloader import PJMDataset, build_gloss_vocab, collate_fn
+from pjm_dataloader import PJMDataset, collate_fn
 
 
 def load_config(config_path="config.yaml"):
@@ -32,19 +32,20 @@ def main():
     else:
         raise FileNotFoundError(f"No checkpoint at {ckpt_path}")
 
-    ANN_DIR = config["data"]["annotation_dir"]
-    ANN_TRAIN = config["data"]["train_ann"]
-    ANN_DEV = config["data"]["dev_ann"]
-
-    gloss2id = build_gloss_vocab(ANN_DIR, [ANN_TRAIN, ANN_DEV])
+    gloss2id = checkpoint["gloss2id"]
     id2gloss = {v: k for k, v in gloss2id.items()}
-    print(f"Vocab size: {len(gloss2id)}")
+    print(f"Checkpoint vocab: {len(gloss2id)}")
+
+    ANN_DIR = config["data"]["annotation_dir"]
+    ANN_DEV = config["data"]["dev_ann"]
 
     dataset = PJMDataset(
         config["data"]["data_dir"],
         ANN_DIR,
         ANN_DEV,
         gloss2id,
+        cache_videos=False,
+        warmup_cache=False,
     )
     print(f"Dev samples: {len(dataset)}")
 
