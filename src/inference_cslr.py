@@ -13,12 +13,13 @@ from pjm_dataloader_cslr import PJMDataset, pjm_ctc_collate_fn
 
 
 def load_config(config_path="config.yaml"):
+    """Loads settings from the YAML configuration file."""
     with open(config_path, "r") as f:
         return yaml.safe_load(f)
 
 
 def greedy_decode(logits, seq_lengths, id2gloss, blank=0):
-    """Fallback greedy CTC decode."""
+    """Decodes predictions by picking the most likely sign at each step and removing duplicates/blanks."""
     preds = torch.argmax(logits, dim=-1)  # [B, T]
     batch_hyps = []
 
@@ -38,7 +39,7 @@ def greedy_decode(logits, seq_lengths, id2gloss, blank=0):
 
 
 def build_lm_decoder(id2gloss, config, args):
-    """Builds a torchaudio CTC beam search decoder powered by KenLM."""
+    """Builds a beam search decoder enhanced with a language model for smarter sentence predictions."""
     lm_model_path = config["training"].get("lm_model", None)
     lexicon_path = config["training"].get("lexicon", None)
 
@@ -78,6 +79,7 @@ def build_lm_decoder(id2gloss, config, args):
 
 
 def main():
+    """Runs inference for the CSLR model and calculates the Word Error Rate (WER)."""
     parser = argparse.ArgumentParser(description="Inference for CoSign Model")
     parser.add_argument(
         "--greedy", action="store_true", help="Force greedy decoding instead of beam search"

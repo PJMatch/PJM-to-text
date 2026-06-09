@@ -7,7 +7,7 @@ from stgcn.stgcn import STGCNCoSign1s
 
 
 class CoSignTemporalCNN(nn.Module):
-    """Temporal module: C3-P2-C3-P2."""
+    """Temporal convolutional network to extract features over time using 1D CNNs (C3-P2-C3-P2)."""
 
     def __init__(self, in_dim=1024, hidden_dim=1024, dropout=0.2):
         super().__init__()
@@ -25,6 +25,7 @@ class CoSignTemporalCNN(nn.Module):
 
     @staticmethod
     def _pool_out_lengths(lengths, kernel_size=2, stride=2, padding=0, dilation=1):
+        """Calculates the new sequence length after a max pooling operation."""
         out_lengths = (
             torch.div(
                 lengths + 2 * padding - dilation * (kernel_size - 1) - 1,
@@ -56,7 +57,7 @@ class CoSignTemporalCNN(nn.Module):
 
 
 class LSTM(nn.Module):
-    """Two-layer bidirectional LSTM contextual module."""
+    """Bidirectional LSTM to capture sequential context from temporal features."""
 
     def __init__(self, input_dim=1024, hidden_size=512, num_layers=2, dropout=0.2):
         super().__init__()
@@ -89,6 +90,7 @@ class LSTM(nn.Module):
 
 
 class SharedGlossHead(nn.Module):
+    """Classification head that uses cosine similarity instead of standard linear projection."""
     def __init__(self, feat_dim, vocab_size):
         super().__init__()
         self.weight = nn.Parameter(torch.empty(vocab_size, feat_dim))
@@ -192,6 +194,7 @@ class CoSign1SModel(nn.Module):
 
 
 class AttentivePooling(nn.Module):
+    """Collapses a sequence of frames into a single feature vector using learned attention weights."""
     def __init__(self, feat_dim):
         super().__init__()
         self.score = nn.Linear(feat_dim, 1)

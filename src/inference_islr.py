@@ -11,11 +11,13 @@ from pjm_dataloader_islr import PJMDataset, collate_fn
 
 
 def load_config(config_path="config.yaml"):
+    """Loads settings from the YAML configuration file."""
     with open(config_path) as f:
         return yaml.safe_load(f)
 
 
 def main():
+    """Runs inference for the ISLR model and prints classification accuracy metrics."""
     config = load_config()
     device = torch.device(
         config["system"]["device"]
