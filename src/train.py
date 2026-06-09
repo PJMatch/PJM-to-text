@@ -196,7 +196,8 @@ def main():
     ANN_DEV = config["data"]["dev_ann"]
     NUM_WORKERS = config["data"]["num_workers"]
     DEV_NUM_WORKERS = config["data"].get("dev_num_workers", NUM_WORKERS)
-    WARMUP_CACHE = config["data"].get("warmup_cache", True)
+    CACHE_VIDEOS = config["data"].get("cache_videos", False)
+    WARMUP_CACHE = config["data"].get("warmup_cache", False) and CACHE_VIDEOS
     DEV_CACHE_VIDEOS = config["data"].get("dev_cache_videos", False)
     PIN_MEMORY = config["data"]["pin_memory"]
 
@@ -223,12 +224,16 @@ def main():
     print(f"Vocab size: {num_classes}")
 
     print("Loading datasets")
+    print(
+        f"  cache: train={CACHE_VIDEOS}"
+        f"{', warmup' if WARMUP_CACHE else ''} | dev={DEV_CACHE_VIDEOS}"
+    )
     train_dataset = PJMDataset(
         DATA_DIR,
         ANN_DIR,
         ANN_TRAIN,
         gloss2id,
-        cache_videos=True,
+        cache_videos=CACHE_VIDEOS,
         warmup_cache=WARMUP_CACHE,
     )
     print(f"  train samples: {len(train_dataset)}")

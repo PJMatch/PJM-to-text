@@ -15,9 +15,10 @@ data:
   annotation_dir: "/pjm/ann_training"
   train_ann: "annotations/PJM_gloss.train.txt"
   dev_ann: "annotations/PJM_gloss.dev.txt"
-  num_workers: 8
-  dev_num_workers: 4
-  warmup_cache: true
+  num_workers: 0
+  dev_num_workers: 0
+  cache_videos: false
+  warmup_cache: false
   dev_cache_videos: false
   pin_memory: true
   min_sentences: 4
