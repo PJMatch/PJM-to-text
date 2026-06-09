@@ -69,7 +69,6 @@ class PJMatchWindow(QMainWindow):
 
         self.vision_worker = VisionWorker(
             shared_queue=self.ai_queue,
-            testing_vid_path=consts.TESTING_VIDEO_PATH,
             mode=self.mode,
         )
         self.vision_worker.frame_ready.connect(self.ui.cameraLabel.update_frame)

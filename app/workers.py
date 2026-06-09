@@ -116,6 +116,9 @@ class AIWorker(QThread):
         self.smoother = SentenceSmoother()
 
         self.last_islr_word = None
+        self.candidate_word = None
+        self.candidate_count = 0
+        self.required_confirmations = 2
 
     def run(self):
         while self.running:
@@ -141,15 +144,30 @@ class AIWorker(QThread):
 
             else:
                 if voted_string:
-                    # print(f"DEBUG Tracker: {voted_string}")
+                    print(f"DEBUG Tracker: {voted_string}")
+
                     if voted_string != self.last_islr_word:
-                        self.last_islr_word = voted_string
-                        print(f"\n--- EMITTING TO UI: {voted_string} ---\n")
-                        self.prediction_ready.emit(voted_string)
-                        with open("prediction_log.txt", "a", encoding="utf-8") as f:
-                            f.write(voted_string + "\n")
+                        if voted_string == self.candidate_word:
+                            self.candidate_count += 1
+                        else:
+                            self.candidate_word = voted_string
+                            self.candidate_count = 1
+
+                        if self.candidate_count >= self.required_confirmations:
+                            self.last_islr_word = voted_string
+                            self.candidate_word = None
+                            self.candidate_count = 0
+
+                            if voted_string == "blank":
+                                voted_string = " "
+                            print(f"\n--- EMITTING TO UI: {voted_string} ---\n")
+                            self.prediction_ready.emit(voted_string)
+                            with open("prediction_log.txt", "a", encoding="utf-8") as f:
+                                f.write(voted_string + "\n")
                 else:
                     self.last_islr_word = None
+                    self.candidate_word = None
+                    self.candidate_count = 0
 
                 # if voted_string:
                 #     print(f"DEBUG Tracker: {voted_string}")
