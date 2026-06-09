@@ -32,30 +32,13 @@ def format_frame_for_nn(frame_dict):
     rh = _safe_part(frame_dict.get("rh", []), consts.RH_LEN)
 
     combined = np.concatenate([pose, face, lh, rh], axis=0)
-    # Output x, y, confidence (channels 0, 1, 3) instead of x, y, z (channels 0, 1, 2)
     return combined[:, [0, 1, 3]]
-
-
-@dataclass
-class SlidingWindow:
-    """Dataclass holding the current window for MediaPipe inference."""
-
-    max_len: int = consts.SLIDING_WINDOW_LENGTH
-    frames: deque = field(default_factory=lambda: deque(maxlen=consts.SLIDING_WINDOW_LENGTH))
-
-    def append(self, frame) -> None:
-        """Appends the frames deque if not full, else appends and drops oldest frame."""
-        self.frames.append(frame)
-
-    def get_window(self):
-        """Returns the full window."""
-        return list(self.frames)
 
 
 class MPNode:
     """MediaPipe inference node class."""
 
-    def __init__(self):
+    def __init__(self, max_window_len):
         """Constructor of MPNode class."""
         face_model_path = consts.TASKS_DIR / "face_landmarker_v2_with_blendshapes.task"
         face_base_options = python.BaseOptions(model_asset_path=str(face_model_path))
@@ -86,25 +69,23 @@ class MPNode:
         )
         self.hand_detector = vision.HandLandmarker.create_from_options(hand_options)
 
-        self.sliding_window = SlidingWindow()
+        self.sliding_window = deque(maxlen=max_window_len)
 
     def __del__(self):
         """Destructor of MPNode class."""
-        self.face_detector.close()
-        self.pose_detector.close()
-        self.hand_detector.close()
-        self.extractor_thread.shutdown(wait=False)
+        if hasattr(self, "face_detector"):
+            self.face_detector.close()
+        if hasattr(self, "pose_detector"):
+            self.pose_detector.close()
+        if hasattr(self, "hand_detector"):
+            self.hand_detector.close()
+        if hasattr(self, "extractor_thread"):
+            self.extractor_thread.shutdown(wait=False)
 
     def extract_raw_keypoints(self, pose_result, hand_result, face_result):
-        """Extracts visible landmarks into a structured dictionary without zero-padding.
-
-        Confidence score is extracted from pose visibility.
-        Face and hands default to 1.0 if detected.
-        Missing components remain as empty lists.
-        """
+        """Extracts visible landmarks into a structured dictionary without zero-padding."""
         frame_data = {"pose": [], "face": [], "lh": [], "rh": []}
 
-        # Pose (33 points)
         if pose_result and pose_result.pose_landmarks:
             frame_data["pose"] = [
                 [
@@ -112,25 +93,19 @@ class MPNode:
                     lm.y,
                     lm.z,
                     getattr(lm, "visibility", 1.0),
-                ]  # meidapipe native visibility score
+                ]
                 for lm in pose_result.pose_landmarks[0]
             ]
 
-        # Face (478 points)
         if face_result and face_result.face_landmarks:
-            frame_data["face"] = [
-                [lm.x, lm.y, lm.z, 1.0]  # confidence score set to 1.0 by default
-                for lm in face_result.face_landmarks[0]
-            ][:478]  # cutoff for limit
+            frame_data["face"] = [[lm.x, lm.y, lm.z, 1.0] for lm in face_result.face_landmarks[0]][
+                :478
+            ]
 
-        # Hands (21 points each)
         if hand_result and hand_result.hand_landmarks:
             for idx, hand_landmarks in enumerate(hand_result.hand_landmarks):
                 handedness = hand_result.handedness[idx][0].category_name
-                coords = [
-                    [lm.x, lm.y, lm.z, 1.0]  # confidence score set to 1.0 by default
-                    for lm in hand_landmarks
-                ]
+                coords = [[lm.x, lm.y, lm.z, 1.0] for lm in hand_landmarks]
                 if handedness == "Left":
                     frame_data["lh"] = coords
                 elif handedness == "Right":
@@ -139,15 +114,8 @@ class MPNode:
         return frame_data
 
     def run_mp_inference(self, frame):
-        """Runs MediaPipe inference on a singular frame.
-
-        Returns:
-            dict: {"face_result", "pose_result", "hand_result"}
-        """
+        """Runs MediaPipe inference on a singular frame."""
         last_timestamp_ms = int(time.time() * 1000)
-
-        # small_frame = cv2.resize(frame, (640, 480))
-        # downsized frame gives approx. 1-2 FPS improvement so for now useless
 
         image_rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
         mp_image = mp.Image(image_format=mp.ImageFormat.SRGB, data=image_rgb)
@@ -190,7 +158,3 @@ class MPNode:
         raw_keypoints = self.get_keypoints_from_frame(frame)
         nn_ready_frame = format_frame_for_nn(raw_keypoints)
         self.sliding_window.append(nn_ready_frame)
-
-
-if __name__ == "__main__":
-    mp_node = MPNode()

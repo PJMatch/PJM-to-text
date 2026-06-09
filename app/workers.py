@@ -18,17 +18,21 @@ class VisionWorker(QThread):
 
     frame_ready = Signal(object)
 
-    def __init__(self, shared_queue, window_width, testing_vid_path=None):
+    def __init__(self, shared_queue, mode="CSLR", testing_vid_path=None):
         """Constructor of the VisionWorker."""
         super().__init__()
         self.running = True
-        self.mp_node = MPNode()
         self.shared_queue = shared_queue
+        self.mode = mode
 
-        self.target_window_width = window_width
+        if self.mode == "ISLR":
+            self.target_window_width = consts.SLIDING_WINDOW_LENGTH_ISLR
+            self.stride = consts.STRIDE_ISLR
+        else:
+            self.target_window_width = consts.SLIDING_WINDOW_LENGTH_CSLR
+            self.stride = consts.STRIDE_CSLR
 
-        self.frames_since_last_predict = 0
-        self.stride = consts.STRIDE
+        self.mp_node = MPNode(max_window_len=self.target_window_width)
 
         self.video_path = testing_vid_path
         if self.video_path is not None:
@@ -37,16 +41,12 @@ class VisionWorker(QThread):
             self.camera = cv2.VideoCapture(0)
 
         self.fps = 30
-
         self.frame_delay_ms = int(1000 / self.fps)
 
         self.frames_since_last_predict = 0
-        self.stride = 15
-
         self.frame_count = 0
-        self.playback_start_time = None
-
         self.absolute_frame = 0
+        self.playback_start_time = None
 
     def run(self):
         """Runs VisionWorker.
@@ -75,7 +75,7 @@ class VisionWorker(QThread):
                 if sleep_time_seconds > 0:
                     self.msleep(int(sleep_time_seconds * 1000))
 
-            if len(self.mp_node.sliding_window.frames) != self.target_window_width:
+            if len(self.mp_node.sliding_window) != self.target_window_width:
                 continue
 
             self.frames_since_last_predict += 1
@@ -83,7 +83,7 @@ class VisionWorker(QThread):
                 continue
 
             self.frames_since_last_predict = 0
-            window_chunk = self.mp_node.sliding_window.get_window()
+            window_chunk = list(self.mp_node.sliding_window)
             window_start = self.absolute_frame - len(window_chunk)
 
             if not self.shared_queue.full():
@@ -101,19 +101,24 @@ class AIWorker(QThread):
     """AI worker.
 
     Manages the PJM predictor and sends the output to display.
-    Pipeline: predict → GlossTracker → SentenceSmoother → UI
     """
 
     prediction_ready = Signal(str)
 
-    def __init__(self, shared_queue):
+    def __init__(self, shared_queue, mode="CSLR"):
         super().__init__()
         self.running = True
         self.shared_queue = shared_queue
-        self.predictor = PJMPredictor()
+        self.mode = mode
 
-        self.tracker = GlossTracker()
+        self.predictor = PJMPredictor(mode=self.mode)
+        self.tracker = GlossTracker(mode=self.mode)
         self.smoother = SentenceSmoother()
+
+        self.last_islr_word = None
+        self.candidate_word = None
+        self.candidate_count = 0
+        self.required_confirmations = 2
 
     def run(self):
         while self.running:
@@ -122,26 +127,60 @@ class AIWorker(QThread):
             except queue.Empty:
                 continue
 
-            gloss_predictions = self.predictor.predict(window_chunk, window_start)
+            gloss_predictions = self.predictor.predict(window_chunk)
 
             voted_string = self.tracker.vote(gloss_predictions)
 
-            if voted_string:
-                print(f"DEBUG Tracker: {voted_string}")
+            if self.mode == "CSLR":
+                if voted_string:
+                    print(f"DEBUG Tracker: {voted_string}")
+                    final_sentence = self.smoother.process(voted_string)
 
-                final_sentence = self.smoother.process(voted_string)
+                    if final_sentence:
+                        print(f"\n--- EMITTING TO UI: {final_sentence} ---\n")
+                        self.prediction_ready.emit(final_sentence)
+                        with open("prediction_log.txt", "a", encoding="utf-8") as f:
+                            f.write(final_sentence + "\n")
 
-                if final_sentence:
-                    print(f"\n--- EMITTING TO UI: {final_sentence} ---\n")
-                    self.prediction_ready.emit(final_sentence)
+            else:
+                if voted_string:
+                    print(f"DEBUG Tracker: {voted_string}")
 
-                    with open("prediction_log.txt", "a", encoding="utf-8") as f:
-                        f.write(final_sentence + "\n")
+                    if voted_string != self.last_islr_word:
+                        if voted_string == self.candidate_word:
+                            self.candidate_count += 1
+                        else:
+                            self.candidate_word = voted_string
+                            self.candidate_count = 1
+
+                        if self.candidate_count >= self.required_confirmations:
+                            self.last_islr_word = voted_string
+                            self.candidate_word = None
+                            self.candidate_count = 0
+
+                            if voted_string == "blank":
+                                voted_string = " "
+                            print(f"\n--- EMITTING TO UI: {voted_string} ---\n")
+                            self.prediction_ready.emit(voted_string)
+                            with open("prediction_log.txt", "a", encoding="utf-8") as f:
+                                f.write(voted_string + "\n")
+                else:
+                    self.last_islr_word = None
+                    self.candidate_word = None
+                    self.candidate_count = 0
+
+                # if voted_string:
+                #     print(f"DEBUG Tracker: {voted_string}")
+
+                #     self.prediction_ready.emit(voted_string)
+                #     with open("prediction_log.txt", "a", encoding="utf-8") as f:
+                #         f.write(voted_string + "\n")
 
     def stop(self):
-        leftover = self.smoother._commit()
-        if leftover:
-            self.prediction_ready.emit(leftover)
+        if self.mode == "CSLR":
+            leftover = self.smoother._commit()
+            if leftover:
+                self.prediction_ready.emit(leftover)
 
         self.running = False
         self.quit()

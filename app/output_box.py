@@ -10,5 +10,6 @@ class OutputBox(QTextEdit):
     def __init__(self, parent=None):
         """Init function for OutputBox."""
         super().__init__()
+        self.setStyleSheet("font-size: 32px; font-weight: bold;")
 
         self.setText("Waiting for predictions...")

@@ -10,17 +10,50 @@ from PySide6.QtCore import QFile
 from PySide6.QtUiTools import QUiLoader
 from PySide6.QtWidgets import (
     QApplication,
+    QDialog,
+    QLabel,
     QMainWindow,
+    QPushButton,
+    QVBoxLayout,
 )
 from workers import AIWorker, VisionWorker
+
+
+class ModeSelectionDialog(QDialog):
+    """A simple popup to choose the model before the app launches."""
+
+    def __init__(self):
+        super().__init__()
+        self.setWindowTitle("PJMatch - Select Mode")
+        self.selected_mode = "CSLR"
+        self.resize(300, 150)
+
+        layout = QVBoxLayout()
+        layout.addWidget(QLabel("Which model do you want to run?"))
+
+        btn_cslr = QPushButton("CSLR (Continuous Sequence)")
+        btn_cslr.clicked.connect(lambda: self.select_mode("CSLR"))
+        layout.addWidget(btn_cslr)
+
+        btn_islr = QPushButton("ISLR (Isolated Sliding Window)")
+        btn_islr.clicked.connect(lambda: self.select_mode("ISLR"))
+        layout.addWidget(btn_islr)
+
+        self.setLayout(layout)
+
+    def select_mode(self, mode):
+        self.selected_mode = mode
+        self.accept()
 
 
 class PJMatchWindow(QMainWindow):
     """PJMatch app main window."""
 
-    def __init__(self):
+    def __init__(self, mode="CSLR"):
         """Init function for PJMatchWindow."""
         super().__init__()
+        self.mode = mode
+
         loader = QUiLoader()
         loader.registerCustomWidget(CameraLabel)
         loader.registerCustomWidget(OutputBox)
@@ -36,19 +69,18 @@ class PJMatchWindow(QMainWindow):
 
         self.vision_worker = VisionWorker(
             shared_queue=self.ai_queue,
-            testing_vid_path=consts.TESTING_VIDEO_PATH,
-            window_width=consts.SLIDING_WINDOW_LENGTH,
+            mode=self.mode,
         )
         self.vision_worker.frame_ready.connect(self.ui.cameraLabel.update_frame)
         self.vision_worker.start()
 
-        self.ai_worker = AIWorker(shared_queue=self.ai_queue)
+        self.ai_worker = AIWorker(shared_queue=self.ai_queue, mode=self.mode)
         self.ai_worker.prediction_ready.connect(self.ui.sentenceHolder.setText)
         self.ai_worker.start()
 
         self.setCentralWidget(self.ui.centralwidget)
         self.resize(1000, 600)
-        self.setWindowTitle("PJMatch")
+        self.setWindowTitle(f"PJMatch - {self.mode} Mode")
 
     def closeEvent(self, event):
         """Stops threads on close."""
@@ -62,6 +94,11 @@ if __name__ == "__main__":
         f.write("")
 
     app = QApplication(sys.argv)
-    window = PJMatchWindow()
-    window.show()
-    sys.exit(app.exec())
+
+    dialog = ModeSelectionDialog()
+    if dialog.exec() == QDialog.Accepted:
+        window = PJMatchWindow(mode=dialog.selected_mode)
+        window.show()
+        sys.exit(app.exec())
+    else:
+        sys.exit(0)
