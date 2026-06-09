@@ -1,6 +1,6 @@
 training:
   epochs: 40
-  batch_size: 256
+  batch_size: 8
   learning_rate: 0.0004
   weight_decay: 0.0001
   grad_clip: 1.0
@@ -10,7 +10,6 @@ model:
   dropout: 0.2
 
 data:
-  dataset: "pjm"
   data_dir: "/pjm/extracted"
   annotation_dir: "/pjm/ann_training"
   train_ann: "annotations/PJM_gloss.train.txt"
