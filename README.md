@@ -3,12 +3,12 @@
 This repo is an attempt to create a deep learning model that does CSLR (Continous Sign Language recognition) on PJM (Polish Sign Language).
 
 ## Custom Dataset
-Our models are trained on a proprietary, custom-built dataset collected entirely by us with the incredible help of dedicated volunteers. It currently features over **5,000 video recordings** of sentences in Polish Sign Language (PJM).
+The model is trained on a dataset we collected with the help of volunteers. It currently consists of over **5,000 recordings** of Polish Sign Language (PJM) sentences.
 
 ## Key Features & Current Performance
 * **Dual Modality:** Supports both **ISLR** (Isolated Sign Language Recognition) for single gloss classification and **CSLR** (Continuous Sign Language Recognition) for full sentence translation.
-* **Skeleton-Based Processing:** Utilizes lightweight MediaPipe landmarks (Body, Face, Left/Right Hand) instead of raw video frames, drastically reducing computational overhead and focusing on pure motion.
-* **ISLR Performance (Reliable):** Our isolated sign classifier is robust, currently achieving **83.82% - Top 1 Accuracy** and **76.3% Macro Recall** (with further optimizations still in progress).
+* **Skeleton-Based Processing:** Utilizes MediaPipe landmarks (Body, Face, Left/Right Hand) instead of raw video frames, reducing computational overhead and focusing on pure motion.
+* **ISLR Performance (Reliable):** Our isolated sign classifier is currently achieving **83.82% - Top 1 Accuracy** and **76.3% Macro Recall** (with further optimizations still in progress).
 * **CSLR Status (Disclaimer):** Hits **12% WER**, but currently overfits to sequence priors (memorizing sentence structures instead of translating signs). This metric is temporarily unreliable while we work on fixes.
 * **Advanced Architecture:** Custom implementation of the CoSign model combined with Spatio-Temporal Graph Convolutional Networks (ST-GCN).
 * **Robust Decoding:** CSLR inference supports standard Greedy CTC decoding as well as advanced Beam Search powered by a KenLM language model.
@@ -21,14 +21,57 @@ The diagram below illustrates the complete data flow and architecture of our mod
 
 ### Architecture Breakdown
 The pipeline is divided into four primary modules:
-1. **Preprocessing:** Raw skeleton data (543 landmarks: x, y, z, confidence) is normalized and filtered to isolate the most relevant coordinates for sign language execution.
-2. **Spatial Module:** The data is split into distinct physical components (Body, Face, Mouth, Left/Right Hand). Each stream is processed through dedicated Spatio-Temporal Graph Convolutional Networks (ST-GCN) to capture local spatial relationships, followed by Global Average Pooling.
-3. **CoSign Module (Masking & Fusion):** The core mechanism of the network. The feature stream splits into a **Main Branch** (multiplied by an attention mask $\Phi$) and an **Inverse Branch** (multiplied by $1-\Phi$). This forces the model to untangle overlapping, co-occurring signs. Both streams are then processed through Fusion MLPs.
-4. **Temporal & Prediction Module:** 1D Temporal CNNs (C3-P2) extract temporal patterns. These features are evaluated by an Auxiliary CTC Head, while also passing through a BiLSTM layer to capture long-term context before the final prediction by the Main CTC Gloss Head.
+1. **Preprocessing:** Raw skeleton data (543 landmarks: x, y, z, confidence) is normalized and filtered to isolate the coordinates used mostly for sign language execution.
+2. **Spatial Module:** The data is split into distinct physical components (Body, Face, Mouth, Left/Right Hand). Each stream is processed through dedicated Spatio-Temporal Graph Convolutional Networks (ST-GCN).
+3. **CoSign Module (Masking & Fusion):** The core mechanism of the network. The feature stream splits into a **Main Branch** (multiplied by an attention mask $\Phi$) and an **Inverse Branch** (multiplied by $1-\Phi$).
+4. **Temporal & Prediction Module:** 1D Temporal CNNs (C3-P2) extract temporal patterns. These go to an Auxiliary CTC Head and pass through a BiLSTM layer before the final prediction by the Main CTC Gloss Head.
 
 ## Training
 
-The training pipeline is fully controlled via the `config.yaml` file. Ensure your hyperparameters and dataset paths are set correctly before starting. Models automatically save checkpoints and log metrics (TensorBoard/W&B).
+Training is controlled via `config.yaml`. Here is an example configuration and what the parameters do:
+
+```yaml
+training:
+  epochs: 40
+  batch_size: 8
+  learning_rate: 0.0004
+  weight_decay: 0.0001
+  grad_clip: 1.0
+  deterministic: false
+
+model:
+  dropout: 0.2
+
+data:
+  data_dir: "/pjm/extracted"           # Directory containing your .npy sequence files
+  annotation_dir: "/pjm/ann_training"  # Directory with JSON annotations
+  train_ann: "annotations/PJM_gloss.train.txt"
+  dev_ann: "annotations/PJM_gloss.dev.txt"
+  num_workers: 0
+  dev_num_workers: 0
+  cache_videos: false
+  warmup_cache: false
+  dev_cache_videos: false
+  pin_memory: true
+  mirror_prob: 0.5                     # Probability of applying horizontal flip augmentation
+  temporal_scale: true                 # Randomly stretch or compress the sequence over time
+  min_sentences: 4
+  train_ratio: 0.75
+
+optimizer:
+  milestones: [20, 35]                 # Epochs at which the learning rate drops
+  gamma: 0.1                           # Factor to multiply the learning rate by at milestones
+
+system:
+  checkpoint_dir: "checkpoints"        # Where weights are saved
+  device: "auto"                       # Set to "cuda" or "cpu"
+
+logging:
+  tensorboard: true
+  wandb: false
+  log_dir: "runs"
+  log_interval: 50
+```
 
 **Train Isolated Signs (ISLR):**
 ```bash
@@ -42,7 +85,7 @@ python src/train_cslr.py
 
 ## Inference & Testing
 
-Evaluate the trained models on the test/dev sets (make sure to put your videos there). The scripts automatically load the best weights (`latest.pth` or `best_model.pth`) from your configured checkpoint directory.
+Evaluate the trained models on the test/dev sets (make sure your `.npy` files are present in the `data_dir`). The scripts automatically load the best weights (`latest.pth` or `best_model.pth`) from your configured checkpoint directory.
 
 **Test ISLR Model:**
 Outputs overall accuracy and top confusion pairs for single signs.
@@ -56,14 +99,6 @@ Outputs Word Error Rate (WER) and sentence-level predictions. By default, it att
 python src/inference_cslr.py
 python src/inference_cslr.py --greedy
 ```
-## Deployment (ONNX Export)
-
-For lightweight, cross-platform inference (e.g., integrating with web apps or edge devices), the trained PyTorch model can be exported to the ONNX format. The provided export script automatically bypasses dynamic graph operations (like LSTM sequence packing) to ensure smooth tracing.
-
-```bash
-python src/export_ONNX.py
-```
-This will generate a model_schema.onnx file ready for production deployment.
 
 ## Citation
 ```
