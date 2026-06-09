@@ -26,6 +26,7 @@ from pjm_dataloader_cslr import PJMDataset, build_gloss_vocab as build_pjm_vocab
 
 
 def parse_args():
+    """Parses command-line arguments, including options to reproduce a specific CSLR run."""
     parser = argparse.ArgumentParser(description="Train CoSign sign language recognition model")
     parser.add_argument(
         "--reproduce_run",
@@ -37,25 +38,28 @@ def parse_args():
 
 
 def mirror_batch(frames, frame_lengths):
+    """Applies horizontal mirroring to the skeleton frames for data augmentation."""
     mirrored = frames.clone()
     mirrored[:, :, :, 0] *= -1
     return mirrored
 
 
 def load_config(config_path="config.yaml"):
+    """Loads the YAML configuration settings."""
     with open(config_path, "r") as f:
         config = yaml.safe_load(f)
     return config
 
 
 def load_training_run_manifest(manifest_path):
-    """Load a training_run.json manifest file."""
+    """Loads a JSON manifest file to recreate the environment of a previous training run."""
     with open(manifest_path, "r") as f:
         run_info = json.load(f)
     return run_info
 
 
 def set_seed(seed, deterministic=True):
+    """Forces determinism across random, numpy, and torch environments."""
     random.seed(seed)
     np.random.seed(seed)
     torch.manual_seed(seed)
@@ -69,12 +73,14 @@ def set_seed(seed, deterministic=True):
 
 
 def seed_worker(worker_id):
+    """Ensures each dataloader worker has a unique, deterministic seed."""
     worker_seed = torch.initial_seed() % (2**32)
     np.random.seed(worker_seed)
     random.seed(worker_seed)
 
 
 def save_training_run(filepath, config, seed, deterministic, extra_info=None):
+    """Saves run details (hyperparameters, seeds) to JSON for future reproducibility."""
     run_info = {
         "config": config,
         "seed": seed,
@@ -149,6 +155,7 @@ OPTIMIZER_GAMMA = float(config["optimizer"]["gamma"])
 
 
 def save_checkpoint(model, optimizer, epoch, gloss2id, val_loss, seed, filepath):
+    """Saves model weights, optimizer, and validation metrics for the CSLR model."""
     checkpoint = {
         "epoch": epoch,
         "model_state_dict": model.state_dict(),
@@ -161,6 +168,7 @@ def save_checkpoint(model, optimizer, epoch, gloss2id, val_loss, seed, filepath)
 
 
 def load_checkpoint(filepath, model, optimizer):
+    """Loads the checkpoint to resume training from a specific epoch."""
     checkpoint = torch.load(filepath, map_location=DEVICE, weights_only=False)
     model.load_state_dict(checkpoint["model_state_dict"])
     optimizer.load_state_dict(checkpoint["optimizer_state_dict"])
@@ -172,13 +180,14 @@ def load_checkpoint(filepath, model, optimizer):
 
 
 def compute_wer(hypotheses, references):
+    """Calculates the WER using the jiwer library."""
     hyp_strs = [" ".join(h) if len(h) > 0 else "<empty>" for h in hypotheses]
     ref_strs = [" ".join(r) if len(r) > 0 else "<empty>" for r in references]
     return jiwer.wer(ref_strs, hyp_strs)
 
 
 def _masked_kl_symmetric(p_logits, q_logits, lengths):
-    """Symmetric KL averaged only over valid (non-padded) timesteps."""
+    """Computes Symmetric KL Divergence between two branches, masked to ignore padded timesteps."""
     p_log = F.log_softmax(p_logits, dim=-1)
     q_log = F.log_softmax(q_logits, dim=-1)
     p_soft = p_log.exp()
@@ -223,9 +232,7 @@ def train_step(
     grad_clip=GRAD_CLIP,
     device=DEVICE,
 ):
-    """
-    Single training step on a batch.
-    """
+    """Executes a single forward and backward pass for a training batch."""
     optimizer.zero_grad()
 
     frames_permuted = frames.permute(0, 3, 1, 2)  # [B, C, T, V]
@@ -255,7 +262,7 @@ def train_step(
 
 
 def _log_batch_tb(tb_writer, loss_dict, keep_prob, global_step):
-    """Log per-batch scalars to TensorBoard."""
+    """Logs individual batch metrics (CTC loss, KL divergence) to TensorBoard."""
     if tb_writer is None:
         return
     tb_writer.add_scalar("batch/total_loss", loss_dict["total"].item(), global_step)
@@ -267,7 +274,7 @@ def _log_batch_tb(tb_writer, loss_dict, keep_prob, global_step):
 
 
 def _log_epoch_histograms(tb_writer, model, epoch):
-    """Log weight and gradient histograms to TensorBoard."""
+    """Logs network weight and gradient distributions to TensorBoard."""
     if tb_writer is None:
         return
     for name, param in model.named_parameters():
@@ -283,7 +290,10 @@ def _log_epoch_histograms(tb_writer, model, epoch):
 def compute_cosign_loss(
     outputs, targets, target_lengths, criterion, kl_weight=KL_WEIGHT, keep_prob=0.8
 ):
-    """Calculates CTC Loss and Bidirectional KL Divergence across branches."""
+    """
+    Calculates the combined loss for the CoSign architecture.
+    Includes Connectionist Temporal Classification (CTC) Loss and Bidirectional KL Divergence.
+    """
     total_loss = 0.0
     ctc_losses = []
 
@@ -331,7 +341,7 @@ def compute_cosign_loss(
 
 
 def evaluate(model, dataloader, criterion, id2gloss, device):
-    """Greedy decode evaluation."""
+    """Evaluates the CSLR model using Greedy CTC Decoding and WER"""
     model.eval()
     total_loss = 0.0
     all_hyps_phi, all_refs = [], []

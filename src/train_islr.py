@@ -23,22 +23,32 @@ from pjm_dataloader_islr import PJMDataset, build_gloss_vocab, collate_fn
 
 
 def parse_args():
+    """
+    Parses command-line arguments for the ISLR training script.
+    Allows passing a manifest file to reproduce a specific training run.
+    """
     parser = argparse.ArgumentParser()
     parser.add_argument("--reproduce_run", type=str, default=None)
     return parser.parse_args()
 
 
 def load_config(config_path="config.yaml"):
+    """Loads the YAML configuration file."""
     with open(config_path) as f:
         return yaml.safe_load(f)
 
 
 def load_training_run_manifest(manifest_path):
+    """Loads a previously saved JSON manifest to reproduce training parameters."""
     with open(manifest_path) as f:
         return json.load(f)
 
 
 def set_seed(seed, deterministic=True):
+    """
+    Sets the random seed across all libraries (random, numpy, torch) 
+    to ensure reproducible training results.
+    """
     random.seed(seed)
     np.random.seed(seed)
     torch.manual_seed(seed)
@@ -52,12 +62,14 @@ def set_seed(seed, deterministic=True):
 
 
 def seed_worker(worker_id):
+    """Sets the seed for dataloader workers to maintain determinism in data loading."""
     worker_seed = torch.initial_seed() % (2**32)
     np.random.seed(worker_seed)
     random.seed(worker_seed)
 
 
 def save_training_run(filepath, config, seed, deterministic, extra_info=None):
+    """Saves the current run's configuration, seeds, and environment info to a JSON file."""
     run_info = {
         "config": config,
         "seed": seed,
@@ -72,6 +84,7 @@ def save_training_run(filepath, config, seed, deterministic, extra_info=None):
 
 
 def save_checkpoint(model, optimizer, epoch, gloss2id, val_acc, filepath):
+    """Saves the model weights, optimizer state, and current metrics to a checkpoint file."""
     checkpoint = {
         "epoch": epoch,
         "model_state_dict": model.state_dict(),
@@ -83,6 +96,7 @@ def save_checkpoint(model, optimizer, epoch, gloss2id, val_acc, filepath):
 
 
 def load_checkpoint(filepath, model, optimizer, device):
+    """Loads the model and optimizer states from a given checkpoint path."""
     checkpoint = torch.load(filepath, map_location=device, weights_only=False)
     model.load_state_dict(checkpoint["model_state_dict"])
     optimizer.load_state_dict(checkpoint["optimizer_state_dict"])
@@ -92,7 +106,7 @@ def load_checkpoint(filepath, model, optimizer, device):
 
 
 def try_resume_checkpoint(filepath, model, optimizer, device):
-    """Resume training only when the checkpoint matches the current model."""
+    """Safely attempts to resume training from a checkpoint, falling back to scratch if incompatible."""
     try:
         return load_checkpoint(filepath, model, optimizer, device)
     except (KeyError, RuntimeError, ValueError) as exc:
@@ -103,6 +117,10 @@ def try_resume_checkpoint(filepath, model, optimizer, device):
 
 
 def evaluate(model, dataloader, criterion, device, id2gloss=None):
+    """
+    Evaluates the ISLR model on the validation set.
+    Computes loss, Top-1 accuracy, Top-3 accuracy, and Macro F1 Score.
+    """
     model.eval()
     total_loss = 0.0
     total_top1 = 0
@@ -165,6 +183,7 @@ def evaluate(model, dataloader, criterion, device, id2gloss=None):
 
 
 def main():
+    """Main training loop for the Isolated Sign Language Recognition (ISLR) model."""
     args = parse_args()
 
     if args.reproduce_run is not None:
