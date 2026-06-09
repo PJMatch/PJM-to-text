@@ -16,6 +16,7 @@ TOTAL_V = POSE_LEN + FACE_LEN + LH_LEN + RH_LEN
 
 
 def load_pjm_annotations(annotation_dir: str, split_file: str):
+    """Loads the sequence of signs for each video from JSON annotation files."""
     ann = {}
     annotation_dir = Path(annotation_dir)
 
@@ -53,6 +54,7 @@ def load_pjm_annotations(annotation_dir: str, split_file: str):
 
 
 def build_gloss_vocab(annotation_dir, split_files):
+    """Creates a dictionary mapping each sign in the dataset to a unique ID (with <blank> for CTC)."""
     glosses = set()
 
     for split_file in split_files:
@@ -69,6 +71,7 @@ def build_gloss_vocab(annotation_dir, split_files):
 
 
 def _safe_part(raw, expected_len):
+    """Pads or cuts the landmark array to a fixed size."""
     arr = np.array(raw, dtype=np.float32) if len(raw) > 0 else np.zeros((0, 4), dtype=np.float32)
     arr = arr.reshape(-1, 4)
     if arr.shape[0] == 0:
@@ -79,6 +82,7 @@ def _safe_part(raw, expected_len):
 
 
 def _convert_pjm_frame(frame_dict):
+    """Combines different body parts into a single frame representation with X, Y, and confidence."""
     pose = _safe_part(frame_dict.get("pose", []), POSE_LEN)
     face = _safe_part(frame_dict.get("face", []), FACE_LEN)
     lh = _safe_part(frame_dict.get("lh", []), LH_LEN)
@@ -90,12 +94,14 @@ def _convert_pjm_frame(frame_dict):
 
 
 def _load_pjm_sequence(file_path):
+    """Loads a full video sequence from a numpy file and processes its frames."""
     raw = np.load(file_path, allow_pickle=True)
     frames = np.stack([_convert_pjm_frame(f) for f in raw])
     return torch.tensor(frames, dtype=torch.float32)
 
 
 def random_temporal_scaling(frames, scale_range=(0.8, 1.2), min_frames=4):
+    """Changes the speed of the video randomly for data augmentation."""
     scale_factor = random.uniform(*scale_range)
     T, V, C = frames.shape
     new_T = max(int(round(T * scale_factor)), min_frames)
@@ -118,6 +124,7 @@ class PJMDataset(Dataset):
         use_temporal_aug: bool = True,
         temporal_scale_range=(0.8, 1.2),
     ):
+        """Initializes the dataset, loads annotations, and prepares sequence paths."""
         self.data_dir = Path(data_dir)
         self.annotations = load_pjm_annotations(annotation_dir, split_file)
         self.gloss2id = gloss2id
@@ -172,6 +179,7 @@ class PJMDataset(Dataset):
 
 
 def pjm_ctc_collate_fn(batch):
+    """Pads frames and target labels so they can be processed together in a batch for CTC loss."""
     frames = [item["frames"] for item in batch]
     targets = [item["target"] for item in batch]
     seq_ids = [item["seq_id"] for item in batch]

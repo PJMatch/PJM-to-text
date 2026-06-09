@@ -24,7 +24,7 @@ RH_START = POSE_LEN + FACE_LEN + LH_LEN
 
 
 def _safe_part(raw, expected_len):
-    "Sanitize data from mediapipe to a constant shape of (expected_len, 4) [x, y, z, confidence]."
+    """Pads or cuts the landmark array to ensure it always has the exact expected length."""
     arr = np.array(raw, dtype=np.float32) if len(raw) > 0 else np.zeros((0, 4), dtype=np.float32)
     arr = arr.reshape(-1, 4)
     if arr.shape[0] == 0:
@@ -35,7 +35,7 @@ def _safe_part(raw, expected_len):
 
 
 def _convert_frame(frame_dict):
-    """Convert one MediaPipe frame dict to (TOTAL_V, 3) tensor [x, y, confidence]."""
+    """Combines pose, face, and hand landmarks from a single frame into one array (X, Y, confidence)."""
     pose = _safe_part(frame_dict.get("pose", []), POSE_LEN)
     face = _safe_part(frame_dict.get("face", []), FACE_LEN)
     lh = _safe_part(frame_dict.get("lh", []), LH_LEN)
@@ -45,7 +45,7 @@ def _convert_frame(frame_dict):
 
 
 def mirror_clip(clip):
-    """Swap hands and reflect x for body and hands. Face is untouched."""
+    """Flips the skeleton horizontally to simulate left/right hand swapping for data augmentation."""
     flipped = clip.clone()  #[T, 553, 3]
     flipped[:, LH_START:RH_START], flipped[:, RH_START:RH_START + RH_LEN] = (
         clip[:, RH_START:RH_START + RH_LEN].clone(),
@@ -57,7 +57,7 @@ def mirror_clip(clip):
 
 
 def temporal_scale_clip(clip, scale_range=(0.8, 1.2), min_frames=4):
-    """Stretch or compress clip along time axis via linear interpolation."""
+    """Speeds up or slows down the video clip to make the model robust to different signing speeds."""
     T, V, C = clip.shape
     scale = random.uniform(*scale_range)
     new_T = max(int(round(T * scale)), min_frames)
@@ -69,7 +69,7 @@ def temporal_scale_clip(clip, scale_range=(0.8, 1.2), min_frames=4):
 
 
 def build_gloss_vocab(annotation_dir, split_files, gloss_map_path=None, include_blank=True):
-    """Build gloss2id from segmented annotations."""
+    """Reads annotation files and creates a dictionary mapping each unique sign to an integer ID."""
     glosses = set()
     gloss_map = load_gloss_map(gloss_map_path)
 
@@ -115,6 +115,7 @@ class PJMDataset(Dataset):
         temporal_scale=False,
         temporal_scale_range=(0.8, 1.2),
     ):
+        """Initializes the dataset and loads video paths and annotations."""
         self.mirror_prob = mirror_prob
         self.temporal_scale = temporal_scale
         self.temporal_scale_range = temporal_scale_range
@@ -142,6 +143,7 @@ class PJMDataset(Dataset):
         return self.video_cache.load(stem)
 
     def __getitem__(self, idx):
+        """Gets a single video clip and its label, applying augmentations if enabled."""
         stem, start, end, gloss_id = self.samples[idx]
 
         raw = self._load_raw_video(stem)
@@ -162,6 +164,7 @@ class PJMDataset(Dataset):
 
 
 def collate_fn(batch):
+    """Pads clips of different lengths with zeros so they can be grouped into a single batch."""
     clips = [item[0] for item in batch]
     labels = [item[1] for item in batch]
     lengths = [item[2] for item in batch]
