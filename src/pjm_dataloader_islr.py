@@ -1,0 +1,173 @@
+import random
+
+import numpy as np
+import torch
+import torch.nn.functional as F
+from dataset_preprocess import (
+    BLANK_GLOSS,
+    END_OF_VIDEO,
+    build_samples,
+    load_gloss_map,
+    map_gloss,
+    unique_stems,
+)
+from torch.nn.utils.rnn import pad_sequence
+from torch.utils.data import Dataset
+
+POSE_LEN = 33
+FACE_LEN = 478
+LH_LEN = 21
+RH_LEN = 21
+TOTAL_V = POSE_LEN + FACE_LEN + LH_LEN + RH_LEN
+LH_START = POSE_LEN + FACE_LEN
+RH_START = POSE_LEN + FACE_LEN + LH_LEN
+
+
+def _safe_part(raw, expected_len):
+    "Sanitize data from mediapipe to a constant shape of (expected_len, 4) [x, y, z, confidence]."
+    arr = np.array(raw, dtype=np.float32) if len(raw) > 0 else np.zeros((0, 4), dtype=np.float32)
+    arr = arr.reshape(-1, 4)
+    if arr.shape[0] == 0:
+        return np.zeros((expected_len, 4), dtype=np.float32)
+    if arr.shape[0] < expected_len:
+        arr = np.pad(arr, ((0, expected_len - arr.shape[0]), (0, 0)))
+    return arr[:expected_len]
+
+
+def _convert_frame(frame_dict):
+    """Convert one MediaPipe frame dict to (TOTAL_V, 3) tensor [x, y, confidence]."""
+    pose = _safe_part(frame_dict.get("pose", []), POSE_LEN)
+    face = _safe_part(frame_dict.get("face", []), FACE_LEN)
+    lh = _safe_part(frame_dict.get("lh", []), LH_LEN)
+    rh = _safe_part(frame_dict.get("rh", []), RH_LEN)
+    combined = np.concatenate([pose, face, lh, rh], axis=0)
+    return combined[:, [0, 1, 3]]
+
+
+def mirror_clip(clip):
+    """Swap hands and reflect x for body and hands. Face is untouched."""
+    flipped = clip.clone()  #[T, 553, 3]
+    flipped[:, LH_START:RH_START], flipped[:, RH_START:RH_START + RH_LEN] = (
+        clip[:, RH_START:RH_START + RH_LEN].clone(),
+        clip[:, LH_START:RH_START].clone(),
+    )
+    flipped[:, :POSE_LEN, 0] = 1.0 - flipped[:, :POSE_LEN, 0]
+    flipped[:, LH_START:RH_START + RH_LEN, 0] = 1.0 - flipped[:, LH_START:RH_START + RH_LEN, 0]
+    return flipped
+
+
+def temporal_scale_clip(clip, scale_range=(0.8, 1.2), min_frames=4):
+    """Stretch or compress clip along time axis via linear interpolation."""
+    T, V, C = clip.shape
+    scale = random.uniform(*scale_range)
+    new_T = max(int(round(T * scale)), min_frames)
+    if new_T == T:
+        return clip
+    x = clip.reshape(T, V * C).T.unsqueeze(0)  #[1, V*C, T]
+    x = F.interpolate(x, size=new_T, mode="linear", align_corners=False)
+    return x.squeeze(0).T.reshape(new_T, V, C)  #[new_T, V, C]
+
+
+def build_gloss_vocab(annotation_dir, split_files, gloss_map_path=None, include_blank=True):
+    """Build gloss2id from segmented annotations."""
+    glosses = set()
+    gloss_map = load_gloss_map(gloss_map_path)
+
+    for split_file in split_files:
+        with open(split_file, encoding="utf-8") as f:
+            for line in f:
+                line = line.strip()
+                if not line:
+                    continue
+                parts = line.split(",")
+                if len(parts) < 3:
+                    continue
+                gloss_name = parts[2]
+                glosses.add(map_gloss(gloss_name, gloss_map))
+
+    gloss2id = {}
+    if include_blank:
+        gloss2id[BLANK_GLOSS] = 0
+
+    start_idx = len(gloss2id)
+    for i, g in enumerate(sorted(glosses), start=start_idx):
+        if g == BLANK_GLOSS:
+            continue
+        gloss2id[g] = i
+
+    return gloss2id
+
+
+class PJMDataset(Dataset):
+    """Dataset for isolated gloss clips."""
+
+    def __init__(
+        self,
+        data_dir,
+        annotation_dir,
+        split_file,
+        gloss2id,
+        gloss_map_path=None,
+        add_blank_segments=True,
+        cache_videos=True,
+        warmup_cache=False,
+        mirror_prob=0.0,
+        temporal_scale=False,
+        temporal_scale_range=(0.8, 1.2),
+    ):
+        self.mirror_prob = mirror_prob
+        self.temporal_scale = temporal_scale
+        self.temporal_scale_range = temporal_scale_range
+        self.samples, self.video_cache = build_samples(
+            data_dir=data_dir,
+            annotation_dir=annotation_dir,
+            split_file=split_file,
+            gloss2id=gloss2id,
+            gloss_map_path=gloss_map_path,
+            add_blank_segments=add_blank_segments,
+            cache_videos=cache_videos,
+        )
+        self.data_dir = self.video_cache.data_dir
+        self.blank_id = gloss2id.get(BLANK_GLOSS, -1)
+
+        if warmup_cache and cache_videos:
+            stems = unique_stems(self.samples)
+            print(f"  warming cache for {len(stems)} unique videos...", flush=True)
+            self.video_cache.warmup(stems)
+
+    def __len__(self):
+        return len(self.samples)
+
+    def _load_raw_video(self, stem):
+        return self.video_cache.load(stem)
+
+    def __getitem__(self, idx):
+        stem, start, end, gloss_id = self.samples[idx]
+
+        raw = self._load_raw_video(stem)
+        if raw is None:
+            raise FileNotFoundError(f"No video file found for stem '{stem}' in {self.data_dir}")
+        if end == END_OF_VIDEO:
+            end = len(raw)
+        frames = np.stack([_convert_frame(f) for f in raw[start:end]])  #[T, 553, 3]
+        clip = torch.tensor(frames, dtype=torch.float32)  #[T, 553, 3]
+
+        if self.temporal_scale and gloss_id != self.blank_id:
+            clip = temporal_scale_clip(clip, self.temporal_scale_range)
+
+        if gloss_id != self.blank_id and torch.rand(1).item() < self.mirror_prob:
+            clip = mirror_clip(clip)
+
+        return clip, gloss_id, clip.shape[0]
+
+
+def collate_fn(batch):
+    clips = [item[0] for item in batch]
+    labels = [item[1] for item in batch]
+    lengths = [item[2] for item in batch]
+
+    padded = pad_sequence(clips, batch_first=True, padding_value=0.0)  #[B, T_max, 553, 3]
+    labels = torch.tensor(labels, dtype=torch.long)
+    lengths = torch.tensor(lengths, dtype=torch.long)
+
+    return padded, labels, lengths

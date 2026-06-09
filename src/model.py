@@ -36,7 +36,6 @@ class CoSignTemporalCNN(nn.Module):
         return torch.clamp(out_lengths, min=1)
 
     def forward(self, x, lengths=None):
-        # x: [B, C, T]
         x = self.conv1(x)
         x = self.norm1(x)
         x = self.relu(x)
@@ -71,7 +70,6 @@ class LSTM(nn.Module):
         )
 
     def forward(self, x, lengths=None):
-        # x: [B, C, T] -> [B, T, C]
         x = x.transpose(1, 2)
 
         if lengths is None:
@@ -158,37 +156,31 @@ class CoSign1SModel(nn.Module):
         B, C, T_prime = cnn_feat.shape
         device = cnn_feat.device
 
-        time_steps = torch.arange(T_prime, device=device).unsqueeze(0)  # [1, T']
-        length_tensor = out_lengths.unsqueeze(1)  # [B, 1]
+        time_steps = torch.arange(T_prime, device=device).unsqueeze(0)
+        length_tensor = out_lengths.unsqueeze(1)
 
         mask = time_steps < length_tensor
-        mask = mask.unsqueeze(1).expand_as(cnn_feat)  # [B, 1024, T']
+        mask = mask.unsqueeze(1).expand_as(cnn_feat)
 
         cnn_feat = cnn_feat * mask
 
-        aux_feat = cnn_feat.transpose(1, 2)  # [B, T', 1024]
-        aux_logits = self.gloss_head(aux_feat)  # [B, T', V]
+        aux_feat = cnn_feat.transpose(1, 2)
+        aux_logits = self.gloss_head(aux_feat)
 
         lstm_out = self.context_lstm(cnn_feat, out_lengths)
-        main_logits = self.gloss_head(lstm_out)  # [B, T', V]
+        main_logits = self.gloss_head(lstm_out)
 
         return {
-            "cnn_feat": cnn_feat,  # [B, 1024, T']
-            "aux_logits": aux_logits,  # [B, T', V]
-            "main_logits": main_logits,  # [B, T', V]
-            "logit_lengths": out_lengths,  # [B]
+            "cnn_feat": cnn_feat,
+            "aux_logits": aux_logits,
+            "main_logits": main_logits,
+            "logit_lengths": out_lengths,
         }
 
     def forward(self, x, lengths, keep_prob=1):
-        """
-        x:       [B, 3, T, V_total]  (mediapipe skeleton input)
-        lengths: [B]  original sequence lengths
-        keep_prob: masking keep probability
-        Returns a dict with predictions for both complementary branches.
-        """
-        branches = self.STGCN(x, keep_prob=keep_prob)  # [B, 2, 1024, T]
-        branch_phi = branches[:, 0, ...]  # [B, 1024, T]
-        branch_phi_inv = branches[:, 1, ...]  # [B, 1024, T]
+        branches = self.STGCN(x, keep_prob=keep_prob)  #[B, 2, 1024, T]
+        branch_phi = branches[:, 0, ...]
+        branch_phi_inv = branches[:, 1, ...]
 
         out_phi = self._forward_branch(branch_phi, lengths)
         out_phi_inv = self._forward_branch(branch_phi_inv, lengths)
@@ -199,30 +191,20 @@ class CoSign1SModel(nn.Module):
         }
 
 
-if __name__ == "__main__":
-    model = CoSign1SModel(num_classes=1000)
-    x = torch.randn(4, 3, 300, 553)
-    lengths = torch.tensor([300, 250, 200, 150])
-    outputs = model(x, lengths)
-    print(f"phi main: {outputs['phi']['main_logits'].shape}")
-    print(f"phi_inv main: {outputs['phi_inv']['main_logits'].shape}")
-    print(f"aux logit lengths: {outputs['phi']['logit_lengths']}")
-
-
 class AttentivePooling(nn.Module):
     def __init__(self, feat_dim):
         super().__init__()
         self.score = nn.Linear(feat_dim, 1)
 
     def forward(self, x, lengths):
-        scores = self.score(x).squeeze(-1)  # [B, T]
+        scores = self.score(x).squeeze(-1)  #[B, T]
 
         B, T = scores.shape
         mask = torch.arange(T, device=x.device).unsqueeze(0) < lengths.unsqueeze(1)
         scores[~mask] = float("-inf")
 
-        weights = F.softmax(scores, dim=-1).unsqueeze(-1)  # [B, T, 1]
-        pooled = (x * weights).sum(dim=1)  # [B, D]
+        weights = F.softmax(scores, dim=-1).unsqueeze(-1)  #[B, T, 1]
+        pooled = (x * weights).sum(dim=1)  #[B, D]
         return pooled
 
 
@@ -237,10 +219,10 @@ class GlossClassifier(nn.Module):
         self.head = nn.Linear(1024, num_classes)
 
     def forward(self, x, lengths):
-        branches = self.STGCN(x, keep_prob=1.0)  # [B, 2, 1024, T]
-        feat = branches[:, 0, :, :]  # [B, 1024, T]
-        feat = feat.transpose(1, 2)  # [B, T, 1024]
+        branches = self.STGCN(x, keep_prob=1.0)  #[B, 2, 1024, T]
+        feat = branches[:, 0, :, :]  #[B, 1024, T]
+        feat = feat.transpose(1, 2)  #[B, T, 1024]
 
-        pooled = self.pool(feat, lengths)  # [B, 1024]
-        logits = self.head(pooled)  # [B, V]
+        pooled = self.pool(feat, lengths)  #[B, 1024]
+        logits = self.head(pooled)  #[B, V]
         return logits
