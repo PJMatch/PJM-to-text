@@ -26,6 +26,7 @@ dependencies = [
     "werkzeug>=3.1.6",
     "pytest>=9.0.2",
     "setuptools<82",
+    "pyside6>=6.11.0",
 ]
 
 [dependency-groups]

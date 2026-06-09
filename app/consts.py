@@ -1,0 +1,23 @@
+"""Module holding const values."""
+
+from pathlib import Path
+
+TASKS_DIR = Path("../mediapipe_tasks")
+
+SLIDING_WINDOW_LENGTH_CSLR = 220
+STRIDE_CSLR = 15
+
+SLIDING_WINDOW_LENGTH_ISLR = 30
+STRIDE_ISLR = 5
+ISLR_CONFIDENCE_THRESHOLD = 0.75
+ISLR_CUMULATIVE_THRESHOLD = 1.9
+
+VOTE_THRESHOLD = 3
+
+POSE_LEN = 33
+FACE_LEN = 478
+LH_LEN = 21
+RH_LEN = 21
+TOTAL_V = POSE_LEN + FACE_LEN + LH_LEN + RH_LEN
+UI_FILE = "res/ui/main_window.ui"
+TESTING_VIDEO_PATH = r"local"
