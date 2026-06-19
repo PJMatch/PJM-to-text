@@ -1,3 +1,10 @@
+"""
+Testing script for Isolated Sign Language Recognition.
+
+Takes your best saved model, runs it on the test videos, and tells you exactly 
+how often it guesses the right sign (and which signs it confuses the most).
+"""
+
 import os
 from collections import Counter, defaultdict
 
@@ -10,14 +17,30 @@ from model import GlossClassifier
 from pjm_dataloader_islr import PJMDataset, collate_fn
 
 
-def load_config(config_path="config.yaml"):
-    """Loads settings from the YAML configuration file."""
+def load_config(config_path: str = "config.yaml") -> dict:
+    """
+    Loads settings from the YAML configuration file.
+
+    Args:
+        config_path (str): Path to the YAML configuration file. Defaults to "config.yaml".
+
+    Returns:
+        dict: A dictionary containing the parsed configuration parameters.
+    """
     with open(config_path) as f:
         return yaml.safe_load(f)
 
 
-def main():
-    """Runs inference for the ISLR model and prints classification accuracy metrics."""
+def main() -> None:
+    """
+    Runs inference for the ISLR model and prints classification accuracy metrics.
+    
+    Loads the trained checkpoint, processes the development/test dataset, 
+    and computes overall accuracy as well as detailed per-class confusion metrics.
+
+    Returns:
+        None
+    """
     config = load_config()
     device = torch.device(
         config["system"]["device"]

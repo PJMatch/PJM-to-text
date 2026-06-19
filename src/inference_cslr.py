@@ -1,3 +1,11 @@
+"""
+Testing script for full sentences.
+
+Uses the trained model to translate long videos into text. It calculates the Word Error Rate (WER) 
+to tell you how many words it missed or swapped. It can also use a language dictionary (KenLM) 
+to make the final sentences sound more natural.
+"""
+
 import os
 import argparse
 import torch
@@ -12,15 +20,34 @@ from model import CoSign1SModel
 from pjm_dataloader_cslr import PJMDataset, pjm_ctc_collate_fn
 
 
-def load_config(config_path="config.yaml"):
-    """Loads settings from the YAML configuration file."""
+def load_config(config_path: str = "config.yaml") -> dict:
+    """
+    Loads settings from the YAML configuration file.
+
+    Args:
+        config_path (str): Path to the YAML configuration file. Defaults to "config.yaml".
+
+    Returns:
+        dict: A dictionary containing the parsed configuration parameters.
+    """
     with open(config_path, "r") as f:
         return yaml.safe_load(f)
 
 
-def greedy_decode(logits, seq_lengths, id2gloss, blank=0):
-    """Decodes predictions by picking the most likely sign at each step and removing duplicates/blanks."""
-    preds = torch.argmax(logits, dim=-1)  # [B, T]
+def greedy_decode(logits: torch.Tensor, seq_lengths: torch.Tensor, id2gloss: dict, blank: int = 0) -> list:
+    """
+    Decodes predictions by picking the most likely sign at each step and removing duplicates/blanks.
+
+    Args:
+        logits (torch.Tensor): Output probabilities from the model of shape [Batch, Time, Classes].
+        seq_lengths (torch.Tensor): 1D tensor of valid sequence lengths for each batch item.
+        id2gloss (dict): Dictionary mapping token IDs to gloss strings.
+        blank (int): The index of the CTC blank token. Defaults to 0.
+
+    Returns:
+        list[str]: A list of decoded sentence hypotheses as strings.
+    """
+    preds = torch.argmax(logits, dim=-1)
     batch_hyps = []
 
     for i in range(preds.size(0)):
@@ -38,8 +65,18 @@ def greedy_decode(logits, seq_lengths, id2gloss, blank=0):
     return batch_hyps
 
 
-def build_lm_decoder(id2gloss, config, args):
-    """Builds a beam search decoder enhanced with a language model for smarter sentence predictions."""
+def build_lm_decoder(id2gloss: dict, config: dict, args: argparse.Namespace):
+    """
+    Builds a beam search decoder enhanced with a language model for smarter sentence predictions.
+
+    Args:
+        id2gloss (dict): Dictionary mapping integer IDs to gloss strings.
+        config (dict): Configuration dictionary containing LM paths and beam settings.
+        args (argparse.Namespace): Parsed command-line arguments to override defaults.
+
+    Returns:
+        torchaudio.models.decoder.CUCTCDecoder: The initialized CTC decoder object.
+    """
     lm_model_path = config["training"].get("lm_model", None)
     lexicon_path = config["training"].get("lexicon", None)
 
@@ -78,8 +115,16 @@ def build_lm_decoder(id2gloss, config, args):
     return decoder_obj
 
 
-def main():
-    """Runs inference for the CSLR model and calculates the Word Error Rate (WER)."""
+def main() -> None:
+    """
+    Runs inference for the CSLR model and calculates the Word Error Rate (WER).
+    
+    Handles checkpoint loading, dataset initialization, decoding (greedy or LM beam search),
+    and prints a detailed error breakdown.
+
+    Returns:
+        None
+    """
     parser = argparse.ArgumentParser(description="Inference for CoSign Model")
     parser.add_argument(
         "--greedy", action="store_true", help="Force greedy decoding instead of beam search"
@@ -199,8 +244,7 @@ def main():
     total_words = sum(len(r.split()) for r in all_refs)
     print(f"Total Reference Words : {total_words}")
     print(
-        f"Substitutions         : {out.substitutions} ({
-            (out.substitutions / total_words) * 100:.2f}%)"
+        f"Substitutions         : {out.substitutions} ({(out.substitutions / total_words) * 100:.2f}%)"
     )
     print(f"Deletions             : {out.deletions} ({(out.deletions / total_words) * 100:.2f}%)")
     print(f"Insertions            : {out.insertions} ({(out.insertions / total_words) * 100:.2f}%)")

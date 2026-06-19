@@ -1,0 +1,65 @@
+{
+  "config": {
+    "training": {
+      "epochs": 40,
+      "batch_size": 8,
+      "learning_rate": 0.0004,
+      "weight_decay": 0.0001,
+      "grad_clip": 1.0,
+      "kl_weight": 0.5,
+      "lm_model": "4gram.arpa",
+      "lexicon": "lexicon.txt",
+      "mirror_data": false,
+      "keep_prob": 0.8,
+      "init_weights": null,
+      "kl_warmup_start": 5,
+      "kl_warmup_end": 10,
+      "deterministic": false
+    },
+    "model": {
+      "dropout": 0.2
+    },
+    "data": {
+      "dataset": "pjm",
+      "train_dir": "pjm_dataset",
+      "dev_dir": "pjm_dataset",
+      "annotation_dir": "annotations/pjm_json",
+      "train_ann": "annotations/PJM.train.txt",
+      "dev_ann": "annotations/PJM.dev.txt",
+      "num_workers": 8,
+      "pin_memory": true
+    },
+    "optimizer": {
+      "milestones": [
+        20,
+        35
+      ],
+      "gamma": 0.1
+    },
+    "system": {
+      "checkpoint_dir": "checkpoints",
+      "device": "auto"
+    },
+    "logging": {
+      "tensorboard": true,
+      "wandb": false,
+      "log_interval": 100,
+      "histogram_interval": 100,
+      "gradient_interval": 100,
+      "log_dir": "runs"
+    }
+  },
+  "seed": 42,
+  "deterministic": false,
+  "torch_version": "2.10.0+cu128",
+  "cuda_available": true,
+  "run_id": "cosign_20260511_191656",
+  "num_classes": 236,
+  "train_samples": 1818,
+  "dev_samples": 628,
+  "device": "cuda",
+  "best_wer": 0.3491439797923099,
+  "best_wer_epoch": 39,
+  "best_train_loss": 6.013047184860497,
+  "best_val_loss": 4.389356972296027
+}

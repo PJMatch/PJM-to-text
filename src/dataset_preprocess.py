@@ -1,4 +1,9 @@
-"""In-memory preprocessing helpers for the PJM isolated-gloss dataset."""
+"""
+In-memory preprocessing helpers for the PJM isolated-gloss dataset.
+
+This module handles the loading of raw MediaPipe arrays, parsing of JSON annotations, 
+and caching of videos to speed up dataloader operations during training.
+"""
 
 import json
 from collections import defaultdict
@@ -10,13 +15,26 @@ EOR_TOKEN = "EoR"
 BLANK_GLOSS = "blank"
 
 
-def default_gloss_map_path():
-    """Return the default gloss map path bundled with the annotations."""
+def default_gloss_map_path() -> Path:
+    """
+    Returns the default gloss map path bundled with the annotations.
+
+    Returns:
+        Path: The resolved absolute path to `gloss_map.json`.
+    """
     return Path(__file__).resolve().parent / "annotations" / "gloss_map.json"
 
 
-def load_gloss_map(gloss_map_path=None):
-    """Load optional gloss canonicalization map without modifying dataset files."""
+def load_gloss_map(gloss_map_path: str = None) -> dict:
+    """
+    Loads an optional gloss canonicalization map without modifying dataset files.
+
+    Args:
+        gloss_map_path (str, optional): Path to the gloss map JSON. Defaults to None.
+
+    Returns:
+        dict: A dictionary mapping raw gloss names to their canonical forms.
+    """
     gloss_map_path = Path(gloss_map_path) if gloss_map_path is not None else default_gloss_map_path()
     if not gloss_map_path.exists():
         return {}
@@ -25,8 +43,17 @@ def load_gloss_map(gloss_map_path=None):
         return json.load(f)
 
 
-def map_gloss(gloss_name, gloss_map):
-    """Return canonical gloss name using gloss_map, falling back to the original name."""
+def map_gloss(gloss_name: str, gloss_map: dict) -> str:
+    """
+    Returns the canonical gloss name using the gloss map, falling back to the original name.
+
+    Args:
+        gloss_name (str): The raw gloss name from annotations.
+        gloss_map (dict): The loaded gloss mapping dictionary.
+
+    Returns:
+        str: The canonical gloss string.
+    """
     return gloss_map.get(gloss_name, gloss_name)
 
 
@@ -34,16 +61,35 @@ END_OF_VIDEO = -1
 
 
 class VideoCache:
-    """In-memory cache for raw .npy videos with optional main-process warmup."""
+    """
+    In-memory cache for raw .npy videos with optional main-process warmup.
+    Used to prevent the dataloader from thrashing the disk.
+    """
 
-    def __init__(self, data_dir, enabled=True):
+    def __init__(self, data_dir: str, enabled: bool = True):
+        """
+        Initializes the VideoCache.
+
+        Args:
+            data_dir (str): Path to the directory containing `.npy` sequence files.
+            enabled (bool): Whether caching is active. Defaults to True.
+        """
         self.data_dir = Path(data_dir)
         self.enabled = enabled
         self.cache = {}
         self.frozen = False
 
-    def load(self, stem):
-        """Load a raw video by stem. Writes to cache only before freeze()."""
+    def load(self, stem: str) -> np.ndarray:
+        """
+        Loads a raw video by stem. Writes to cache only before freeze().
+
+        Args:
+            stem (str): The filename stem of the video (without extension).
+
+        Returns:
+            np.ndarray: The loaded numpy array containing the skeleton frames, 
+                or None if the file does not exist.
+        """
         if stem in self.cache:
             return self.cache[stem]
 
@@ -56,8 +102,16 @@ class VideoCache:
             self.cache[stem] = raw
         return raw
 
-    def warmup(self, stems):
-        """Preload all stems in the main process, then freeze for forked workers."""
+    def warmup(self, stems: list) -> None:
+        """
+        Preloads all stems in the main process, then freezes the cache for forked workers.
+
+        Args:
+            stems (list[str]): A list of video stems to load into RAM.
+
+        Returns:
+            None
+        """
         if not self.enabled:
             return
 
@@ -75,13 +129,30 @@ class VideoCache:
         )
 
 
-def unique_stems(samples):
-    """Return sorted unique video stems referenced by dataset samples."""
+def unique_stems(samples: list) -> list:
+    """
+    Returns a sorted list of unique video stems referenced by dataset samples.
+
+    Args:
+        samples (list[tuple]): The generated dataset samples.
+
+    Returns:
+        list[str]: A sorted list of unique string stems.
+    """
     return sorted({stem for stem, _, _, _ in samples})
 
 
-def load_split_segments(split_file):
-    """Read split file into {stem: [(start, gloss), ...]}."""
+def load_split_segments(split_file: str) -> dict:
+    """
+    Reads a split file into a dictionary format.
+
+    Args:
+        split_file (str): Path to the text file containing the dataset split.
+
+    Returns:
+        dict[str, list[tuple[int, str]]]: A dictionary mapping video stems to 
+            a list of tuples containing (start_frame, gloss_name).
+    """
     stem_segments = defaultdict(list)
     with open(split_file, encoding="utf-8") as f:
         for line in f:
@@ -98,8 +169,19 @@ def load_split_segments(split_file):
     return stem_segments
 
 
-def load_timestamped_segments(annotation_dir, stem):
-    """Return list of (gloss, start) and the EoR frame for one annotation file."""
+def load_timestamped_segments(annotation_dir: str, stem: str) -> tuple:
+    """
+    Returns a list of timestamped glosses and the End-of-Record (EoR) frame.
+
+    Args:
+        annotation_dir (str): Path to the directory with JSON annotations.
+        stem (str): The video stem to load.
+
+    Returns:
+        tuple[list[tuple[str, int]], int | None]: A tuple containing:
+            - A list of tuples containing (gloss_name, start_frame).
+            - The integer frame index for the EoR token (or None if not found).
+    """
     json_path = Path(annotation_dir) / f"{stem}.json"
     if not json_path.exists():
         return [], None
@@ -122,15 +204,34 @@ def load_timestamped_segments(annotation_dir, stem):
 
 
 def build_samples(
-    data_dir,
-    annotation_dir,
-    split_file,
-    gloss2id,
-    gloss_map_path=None,
-    add_blank_segments=True,
-    cache_videos=True,
-):
-    """Build dataset samples in memory and return them with a shared video cache."""
+    data_dir: str,
+    annotation_dir: str,
+    split_file: str,
+    gloss2id: dict,
+    gloss_map_path: str = None,
+    add_blank_segments: bool = True,
+    cache_videos: bool = True,
+) -> tuple:
+    """
+    Builds dataset samples in memory and returns them with a shared video cache.
+
+    Iterates through the split definitions and annotations to define the start 
+    and end frames for every isolated sign clip.
+
+    Args:
+        data_dir (str): Path to the raw sequence data.
+        annotation_dir (str): Path to the JSON annotations.
+        split_file (str): Path to the split definition file.
+        gloss2id (dict): Dictionary mapping gloss names to IDs.
+        gloss_map_path (str, optional): Path to canonical mapping rules. Defaults to None.
+        add_blank_segments (bool): Whether to inject <blank> sequences. Defaults to True.
+        cache_videos (bool): Whether to initialize the video cache. Defaults to True.
+
+    Returns:
+        tuple[list[tuple], VideoCache]: A tuple containing:
+            - A list of sample tuples: `(stem, start_frame, end_frame, gloss_id)`.
+            - The instantiated and optionally populated VideoCache object.
+    """
     gloss_map = load_gloss_map(gloss_map_path)
     video_cache = VideoCache(data_dir, enabled=cache_videos)
     samples = []

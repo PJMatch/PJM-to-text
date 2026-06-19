@@ -1,4 +1,10 @@
-"""Build train/dev split files from per-gloss segmented annotations."""
+"""
+Build train/dev split files from per-gloss segmented annotations.
+
+This script processes JSON annotation files to extract temporal segments for each gloss.
+It then safely splits these segments into training and development sets based on unique 
+sentence IDs to prevent data leakage between sets.
+"""
 
 import json
 import os
@@ -9,17 +15,30 @@ from pathlib import Path
 import yaml
 
 
-def load_config():
-    """Read config.yaml and return the data section."""
+def load_config() -> dict:
+    """
+    Reads the config.yaml file and extracts the data section.
+
+    Returns:
+        dict: The configuration parameters related to data processing.
+    """
     config_path = Path(__file__).parent / "config.yaml"
     with open(config_path) as f:
         config = yaml.safe_load(f)
     return config["data"]
 
 
+def collect_segments(ann_dir: str) -> dict:
+    """
+    Scans annotation files and groups video segments by their corresponding gloss.
 
-def collect_segments(ann_dir):
-    """Return dict: gloss -> list of (sentence_id, stem, start_frame)."""
+    Args:
+        ann_dir (str): Path to the directory containing JSON annotation files.
+
+    Returns:
+        dict[str, list[tuple[str, str, int]]]: A dictionary mapping each gloss string 
+            to a list of tuples containing (sentence_id, stem, start_frame).
+    """
     gloss_segments = defaultdict(list)
     for fname in os.listdir(ann_dir):
         with open(os.path.join(ann_dir, fname)) as f:
@@ -46,8 +65,27 @@ def collect_segments(ann_dir):
     return gloss_segments
 
 
-def build_splits(gloss_segments, min_sentences, train_ratio, seed):
-    """Split per gloss by sentence_id. Returns (train_lines, dev_lines)."""
+def build_splits(gloss_segments: dict, min_sentences: int, train_ratio: float, seed: int) -> tuple:
+    """
+    Splits the collected segments into training and development sets based on sentence IDs.
+
+    Ensures that the same base sentence doesn't appear in both training and dev sets.
+
+    Args:
+        gloss_segments (dict[str, list]): The dictionary of segments grouped by gloss.
+        min_sentences (int): Minimum number of unique sentences required to perform a split. 
+            If a gloss has fewer, all its instances go to the training set.
+        train_ratio (float): The proportion of unique sentences to allocate to the training set.
+        seed (int): Random seed for reproducible shuffling of sentence IDs.
+
+    Returns:
+        tuple[list[str], list[str], int, int, set[str]]: A tuple containing:
+            - List of formatted string lines for the training split file.
+            - List of formatted string lines for the development split file.
+            - Total number of training segments.
+            - Total number of development segments.
+            - Set of unique glosses present in the development set.
+    """
     random.seed(seed)
     train_lines = []
     dev_lines = []
@@ -93,7 +131,16 @@ def build_splits(gloss_segments, min_sentences, train_ratio, seed):
     return train_lines, dev_lines, train_count, dev_count, dev_glosses
 
 
-def main():
+def main() -> None:
+    """
+    Main execution pipeline for building dataset splits.
+
+    Loads the configuration, collects segments from raw annotations, applies the 
+    split logic, and saves the resulting mappings to text files.
+
+    Returns:
+        None
+    """
     cfg = load_config()
     base = Path(__file__).parent
 

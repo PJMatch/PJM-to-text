@@ -1,3 +1,10 @@
+"""
+Training script for full sentences (CSLR).
+
+Teaches the model to read a continuous sequence of movements and translate it into a full sentence. 
+Uses CTC, which lets the model learn without needing exact timestamps for every single word.
+"""
+
 import argparse
 import json
 import os
@@ -25,8 +32,13 @@ from model import CoSign1SModel
 from pjm_dataloader_cslr import PJMDataset, build_gloss_vocab as build_pjm_vocab, pjm_ctc_collate_fn
 
 
-def parse_args():
-    """Parses command-line arguments, including options to reproduce a specific CSLR run."""
+def parse_args() -> argparse.Namespace:
+    """
+    Parses command-line arguments, including options to reproduce a specific CSLR run.
+
+    Returns:
+        argparse.Namespace: Parsed arguments containing paths or flags for the script.
+    """
     parser = argparse.ArgumentParser(description="Train CoSign sign language recognition model")
     parser.add_argument(
         "--reproduce_run",
@@ -37,29 +49,63 @@ def parse_args():
     return parser.parse_args()
 
 
-def mirror_batch(frames, frame_lengths):
-    """Applies horizontal mirroring to the skeleton frames for data augmentation."""
+def mirror_batch(frames: torch.Tensor, frame_lengths: torch.Tensor) -> torch.Tensor:
+    """
+    Applies horizontal mirroring to the skeleton frames for data augmentation.
+
+    Args:
+        frames (torch.Tensor): A batch of skeleton sequences of shape [B, C, T, V].
+        frame_lengths (torch.Tensor): 1D tensor of original sequence lengths.
+
+    Returns:
+        torch.Tensor: The mirrored skeleton data tensor with the same shape as the input.
+    """
     mirrored = frames.clone()
     mirrored[:, :, :, 0] *= -1
     return mirrored
 
 
-def load_config(config_path="config.yaml"):
-    """Loads the YAML configuration settings."""
+def load_config(config_path: str = "config.yaml") -> dict:
+    """
+    Loads the YAML configuration settings.
+
+    Args:
+        config_path (str): Path to the YAML configuration file. Defaults to "config.yaml".
+
+    Returns:
+        dict: A dictionary containing the parsed configuration parameters.
+    """
     with open(config_path, "r") as f:
         config = yaml.safe_load(f)
     return config
 
 
-def load_training_run_manifest(manifest_path):
-    """Loads a JSON manifest file to recreate the environment of a previous training run."""
+def load_training_run_manifest(manifest_path: str) -> dict:
+    """
+    Loads a JSON manifest file to recreate the environment of a previous training run.
+
+    Args:
+        manifest_path (str): Path to the saved run's JSON manifest.
+
+    Returns:
+        dict: A dictionary containing saved hyperparameters and seeds.
+    """
     with open(manifest_path, "r") as f:
         run_info = json.load(f)
     return run_info
 
 
-def set_seed(seed, deterministic=True):
-    """Forces determinism across random, numpy, and torch environments."""
+def set_seed(seed: int, deterministic: bool = True) -> None:
+    """
+    Forces determinism across random, numpy, and torch environments.
+
+    Args:
+        seed (int): The integer seed value.
+        deterministic (bool): Whether to force strict PyTorch determinism (may slow down training). Defaults to True.
+
+    Returns:
+        None
+    """
     random.seed(seed)
     np.random.seed(seed)
     torch.manual_seed(seed)
@@ -72,15 +118,35 @@ def set_seed(seed, deterministic=True):
         torch.backends.cudnn.benchmark = True
 
 
-def seed_worker(worker_id):
-    """Ensures each dataloader worker has a unique, deterministic seed."""
+def seed_worker(worker_id: int) -> None:
+    """
+    Ensures each dataloader worker has a unique, deterministic seed.
+
+    Args:
+        worker_id (int): The ID of the dataloader worker process.
+
+    Returns:
+        None
+    """
     worker_seed = torch.initial_seed() % (2**32)
     np.random.seed(worker_seed)
     random.seed(worker_seed)
 
 
-def save_training_run(filepath, config, seed, deterministic, extra_info=None):
-    """Saves run details (hyperparameters, seeds) to JSON for future reproducibility."""
+def save_training_run(filepath: str, config: dict, seed: int, deterministic: bool, extra_info: dict = None) -> None:
+    """
+    Saves run details (hyperparameters, seeds) to JSON for future reproducibility.
+
+    Args:
+        filepath (str): Destination path for the JSON manifest.
+        config (dict): The training configuration dictionary.
+        seed (int): The random seed used for this run.
+        deterministic (bool): Flag indicating if strict determinism was enabled.
+        extra_info (dict, optional): Additional info (like run IDs) to append. Defaults to None.
+
+    Returns:
+        None
+    """
     run_info = {
         "config": config,
         "seed": seed,
@@ -154,8 +220,22 @@ OPTIMIZER_MILESTONES = config["optimizer"]["milestones"]
 OPTIMIZER_GAMMA = float(config["optimizer"]["gamma"])
 
 
-def save_checkpoint(model, optimizer, epoch, gloss2id, val_loss, seed, filepath):
-    """Saves model weights, optimizer, and validation metrics for the CSLR model."""
+def save_checkpoint(model: nn.Module, optimizer: optim.Optimizer, epoch: int, gloss2id: dict, val_loss: float, seed: int, filepath: str) -> None:
+    """
+    Saves model weights, optimizer, and validation metrics for the CSLR model.
+
+    Args:
+        model (nn.Module): The PyTorch model being trained.
+        optimizer (optim.Optimizer): The optimizer managing model updates.
+        epoch (int): The current epoch number.
+        gloss2id (dict): The vocabulary mapping dictionary.
+        val_loss (float): The calculated validation loss.
+        seed (int): The random seed used.
+        filepath (str): The destination path for the .pth checkpoint file.
+
+    Returns:
+        None
+    """
     checkpoint = {
         "epoch": epoch,
         "model_state_dict": model.state_dict(),
@@ -167,8 +247,19 @@ def save_checkpoint(model, optimizer, epoch, gloss2id, val_loss, seed, filepath)
     torch.save(checkpoint, filepath)
 
 
-def load_checkpoint(filepath, model, optimizer):
-    """Loads the checkpoint to resume training from a specific epoch."""
+def load_checkpoint(filepath: str, model: nn.Module, optimizer: optim.Optimizer) -> tuple:
+    """
+    Loads the checkpoint to resume training from a specific epoch.
+
+    Args:
+        filepath (str): Path to the saved .pth checkpoint file.
+        model (nn.Module): The initialized PyTorch model to load weights into.
+        optimizer (optim.Optimizer): The optimizer to load states into.
+
+    Returns:
+        tuple[int, nn.Module, optim.Optimizer]: A tuple containing the starting epoch, 
+            the updated model, and the updated optimizer.
+    """
     checkpoint = torch.load(filepath, map_location=DEVICE, weights_only=False)
     model.load_state_dict(checkpoint["model_state_dict"])
     optimizer.load_state_dict(checkpoint["optimizer_state_dict"])
@@ -179,15 +270,34 @@ def load_checkpoint(filepath, model, optimizer):
     return epoch, model, optimizer
 
 
-def compute_wer(hypotheses, references):
-    """Calculates the WER using the jiwer library."""
+def compute_wer(hypotheses: list, references: list) -> float:
+    """
+    Calculates the Word Error Rate (WER) using the jiwer library.
+
+    Args:
+        hypotheses (list[list[str]]): A list of predicted string tokens per sentence.
+        references (list[list[str]]): A list of ground truth string tokens per sentence.
+
+    Returns:
+        float: The calculated global Word Error Rate.
+    """
     hyp_strs = [" ".join(h) if len(h) > 0 else "<empty>" for h in hypotheses]
     ref_strs = [" ".join(r) if len(r) > 0 else "<empty>" for r in references]
     return jiwer.wer(ref_strs, hyp_strs)
 
 
-def _masked_kl_symmetric(p_logits, q_logits, lengths):
-    """Computes Symmetric KL Divergence between two branches, masked to ignore padded timesteps."""
+def _masked_kl_symmetric(p_logits: torch.Tensor, q_logits: torch.Tensor, lengths: torch.Tensor) -> torch.Tensor:
+    """
+    Computes Symmetric KL Divergence between two branches, masked to ignore padded timesteps.
+
+    Args:
+        p_logits (torch.Tensor): Output logits from the main branch.
+        q_logits (torch.Tensor): Output logits from the inverse branch.
+        lengths (torch.Tensor): 1D tensor containing the valid sequence lengths.
+
+    Returns:
+        torch.Tensor: The scalar value of the calculated symmetric KL divergence.
+    """
     p_log = F.log_softmax(p_logits, dim=-1)
     q_log = F.log_softmax(q_logits, dim=-1)
     p_soft = p_log.exp()
@@ -205,13 +315,29 @@ def _masked_kl_symmetric(p_logits, q_logits, lengths):
     return (kl_per_token * mask).sum() / valid_count
 
 
-def get_keep_prob(epoch):
-    """Keep probability (can be made dynamic in the future)."""
+def get_keep_prob(epoch: int) -> float:
+    """
+    Returns the temporal dropout keep probability.
+
+    Args:
+        epoch (int): The current training epoch.
+
+    Returns:
+        float: The probability of keeping frames in the main branch.
+    """
     return KEEP_PROB
 
 
-def get_kl_weight(epoch):
-    """KL active from ep KL_WARMUP_START, linear to ep KL_WARMUP_END."""
+def get_kl_weight(epoch: int) -> float:
+    """
+    Schedules the KL divergence weight dynamically based on the current epoch.
+
+    Args:
+        epoch (int): The current training epoch.
+
+    Returns:
+        float: The active KL divergence weight scale.
+    """
     if epoch < KL_WARMUP_START:
         return 0.0
     if epoch < KL_WARMUP_END:
@@ -220,26 +346,42 @@ def get_kl_weight(epoch):
 
 
 def train_step(
-    model,
-    optimizer,
-    frames,
-    frame_lengths,
-    targets,
-    target_lengths,
-    criterion,
-    kl_weight=KL_WEIGHT,
-    keep_prob=KEEP_PROB,
-    grad_clip=GRAD_CLIP,
-    device=DEVICE,
-):
-    """Executes a single forward and backward pass for a training batch."""
+    model: nn.Module,
+    optimizer: optim.Optimizer,
+    frames: torch.Tensor,
+    frame_lengths: torch.Tensor,
+    targets: torch.Tensor,
+    target_lengths: torch.Tensor,
+    criterion: nn.Module,
+    kl_weight: float = KL_WEIGHT,
+    keep_prob: float = KEEP_PROB,
+    grad_clip: float = GRAD_CLIP,
+    device: torch.device = DEVICE,
+) -> tuple:
+    """
+    Executes a single forward and backward pass for a training batch.
+
+    Args:
+        model (nn.Module): The CoSign model.
+        optimizer (optim.Optimizer): The optimizer for updating weights.
+        frames (torch.Tensor): Padded batch of skeleton sequences.
+        frame_lengths (torch.Tensor): Original lengths of sequences.
+        targets (torch.Tensor): Concatenated target gloss IDs.
+        target_lengths (torch.Tensor): Original lengths of targets.
+        criterion (nn.Module): The CTC loss function.
+        kl_weight (float): Multiplier for the KL divergence term. Defaults to KL_WEIGHT.
+        keep_prob (float): Feature keep probability for the masking module. Defaults to KEEP_PROB.
+        grad_clip (float): Maximum norm for gradient clipping. Defaults to GRAD_CLIP.
+        device (torch.device): Device where calculations occur. Defaults to DEVICE.
+
+    Returns:
+        tuple[dict[str, torch.Tensor], float]: A dictionary of calculated losses and the active keep probability.
+    """
     optimizer.zero_grad()
 
-    frames_permuted = frames.permute(0, 3, 1, 2)  # [B, C, T, V]
+    frames_permuted = frames.permute(0, 3, 1, 2)
 
     beta_dist = torch.distributions.beta.Beta(2.0, 2.0)
-    # dynamic_keep_prob = beta_dist.sample().item()
-    # dynamic_keep_prob = max(0.1, min(0.9, dynamic_keep_prob))
     dynamic_keep_prob = keep_prob
 
     outputs = model(frames_permuted, frame_lengths, keep_prob=dynamic_keep_prob)
@@ -261,8 +403,19 @@ def train_step(
     return loss_dict, dynamic_keep_prob
 
 
-def _log_batch_tb(tb_writer, loss_dict, keep_prob, global_step):
-    """Logs individual batch metrics (CTC loss, KL divergence) to TensorBoard."""
+def _log_batch_tb(tb_writer: SummaryWriter, loss_dict: dict, keep_prob: float, global_step: int) -> None:
+    """
+    Logs individual batch metrics (CTC loss, KL divergence) to TensorBoard.
+
+    Args:
+        tb_writer (SummaryWriter): The TensorBoard writer instance.
+        loss_dict (dict): Dictionary containing all computed loss tensors.
+        keep_prob (float): The active feature keep probability.
+        global_step (int): The current global training step index.
+
+    Returns:
+        None
+    """
     if tb_writer is None:
         return
     tb_writer.add_scalar("batch/total_loss", loss_dict["total"].item(), global_step)
@@ -273,26 +426,48 @@ def _log_batch_tb(tb_writer, loss_dict, keep_prob, global_step):
     tb_writer.add_scalar("batch/keep_prob", keep_prob, global_step)
 
 
-def _log_epoch_histograms(tb_writer, model, epoch):
-    """Logs network weight and gradient distributions to TensorBoard."""
+def _log_epoch_histograms(tb_writer: SummaryWriter, model: nn.Module, epoch: int) -> None:
+    """
+    Logs network weight and gradient distributions to TensorBoard.
+
+    Args:
+        tb_writer (SummaryWriter): The TensorBoard writer instance.
+        model (nn.Module): The model to extract parameters from.
+        epoch (int): The current training epoch.
+
+    Returns:
+        None
+    """
     if tb_writer is None:
         return
     for name, param in model.named_parameters():
-        if param.ndim >= 2:  # skip biases, scale, etc.
+        if param.ndim >= 2:  
             tb_writer.add_histogram(f"weights/{name}", param.data, epoch)
             if param.grad is not None:
                 tb_writer.add_histogram(f"grads/{name}", param.grad, epoch)
-    # Log gloss_head scale separately (important for training dynamics)
     if hasattr(model, "gloss_head") and hasattr(model.gloss_head, "scale"):
         tb_writer.add_scalar("model/gloss_head_scale", model.gloss_head.scale.item(), epoch)
 
 
 def compute_cosign_loss(
-    outputs, targets, target_lengths, criterion, kl_weight=KL_WEIGHT, keep_prob=0.8
-):
+    outputs: dict, targets: torch.Tensor, target_lengths: torch.Tensor, criterion: nn.Module, kl_weight: float = KL_WEIGHT, keep_prob: float = 0.8
+) -> dict:
     """
     Calculates the combined loss for the CoSign architecture.
-    Includes Connectionist Temporal Classification (CTC) Loss and Bidirectional KL Divergence.
+    
+    Combines Connectionist Temporal Classification (CTC) Loss for text 
+    alignment and Bidirectional KL Divergence to separate co-occurring signs.
+
+    Args:
+        outputs (dict): The output dictionary returned by the model's forward pass.
+        targets (torch.Tensor): 1D tensor of ground truth token IDs.
+        target_lengths (torch.Tensor): 1D tensor of true lengths for each target.
+        criterion (nn.Module): PyTorch CTCLoss module.
+        kl_weight (float): Scalar multiplier for the KL divergence term. Defaults to KL_WEIGHT.
+        keep_prob (float): Feature keep probability. Defaults to 0.8.
+
+    Returns:
+        dict[str, torch.Tensor]: A dictionary containing calculated partial and total losses.
     """
     total_loss = 0.0
     ctc_losses = []
@@ -340,8 +515,23 @@ def compute_cosign_loss(
     }
 
 
-def evaluate(model, dataloader, criterion, id2gloss, device):
-    """Evaluates the CSLR model using Greedy CTC Decoding and WER"""
+def evaluate(model: nn.Module, dataloader: DataLoader, criterion: nn.Module, id2gloss: dict, device: torch.device) -> tuple:
+    """
+    Evaluates the CSLR model using Greedy CTC Decoding and Word Error Rate (WER).
+
+    Args:
+        model (nn.Module): The trained model to evaluate.
+        dataloader (DataLoader): DataLoader for validation/test data.
+        criterion (nn.Module): The CTC loss function.
+        id2gloss (dict): Mapping from token IDs to gloss strings.
+        device (torch.device): Compute device for evaluation.
+
+    Returns:
+        tuple[float, float, list[tuple[list[str], list[str]]]]: 
+            - avg_val_loss: The average computed validation loss over batches.
+            - avg_wer: The computed Word Error Rate.
+            - examples: A list of (reference, prediction) string token tuples.
+    """
     model.eval()
     total_loss = 0.0
     all_hyps_phi, all_refs = [], []
@@ -405,7 +595,14 @@ def evaluate(model, dataloader, criterion, id2gloss, device):
 
     return total_loss / len(dataloader), avg_wer, examples
 
-def main():
+def main() -> None:
+    """
+    Main training loop for the Continuous Sign Language Recognition (CSLR) model.
+    Handles data loading, model initialization, optimization steps, and checkpointing.
+
+    Returns:
+        None
+    """
     os.makedirs(CHECKPOINT_DIR, exist_ok=True)
 
     set_seed(SEED, deterministic=DETERMINISTIC)
@@ -523,7 +720,7 @@ def main():
               f"keep_prob: {current_keep_prob:.3f} | kl_weight: {current_kl_weight:.3f}")
 
         for batch_idx, batch in enumerate(train_loader):
-            frames = batch["frames"].to(DEVICE)  # [B, T, V, C]
+            frames = batch["frames"].to(DEVICE)  
             frame_lengths = batch["frame_lengths"].to(DEVICE)
             targets = batch["targets"].to(DEVICE)
             target_lengths = batch["target_lengths"].to(DEVICE)
@@ -564,7 +761,6 @@ def main():
                 num_batches += 1
                 global_step += 1
 
-            # Per-batch TB logging
             if tb_writer and batch_idx % LOG_INTERVAL == 0:
                 _log_batch_tb(tb_writer, loss_dict_orig, keep_prob_orig, global_step)
 

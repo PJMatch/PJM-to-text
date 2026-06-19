@@ -1,3 +1,10 @@
+"""
+Training script for Isolated Sign Language Recognition (ISLR).
+
+Loads the skeleton data, sets up the model, and trains it to recognize one sign at a time. 
+After every epoch, it checks how well the model is doing on new data and saves the best version.
+"""
+
 import argparse
 import json
 import os
@@ -22,32 +29,58 @@ from model import GlossClassifier
 from pjm_dataloader_islr import PJMDataset, build_gloss_vocab, collate_fn
 
 
-def parse_args():
+def parse_args() -> argparse.Namespace:
     """
     Parses command-line arguments for the ISLR training script.
     Allows passing a manifest file to reproduce a specific training run.
+
+    Returns:
+        argparse.Namespace: Parsed arguments containing paths or flags for the script.
     """
     parser = argparse.ArgumentParser()
     parser.add_argument("--reproduce_run", type=str, default=None)
     return parser.parse_args()
 
 
-def load_config(config_path="config.yaml"):
-    """Loads the YAML configuration file."""
+def load_config(config_path: str = "config.yaml") -> dict:
+    """
+    Loads the YAML configuration file.
+
+    Args:
+        config_path (str): Path to the YAML configuration file. Defaults to "config.yaml".
+
+    Returns:
+        dict: A dictionary containing the parsed configuration parameters.
+    """
     with open(config_path) as f:
         return yaml.safe_load(f)
 
 
-def load_training_run_manifest(manifest_path):
-    """Loads a previously saved JSON manifest to reproduce training parameters."""
+def load_training_run_manifest(manifest_path: str) -> dict:
+    """
+    Loads a previously saved JSON manifest to reproduce training parameters.
+
+    Args:
+        manifest_path (str): Path to the saved run's JSON manifest.
+
+    Returns:
+        dict: A dictionary containing saved hyperparameters and seeds.
+    """
     with open(manifest_path) as f:
         return json.load(f)
 
 
-def set_seed(seed, deterministic=True):
+def set_seed(seed: int, deterministic: bool = True) -> None:
     """
     Sets the random seed across all libraries (random, numpy, torch) 
     to ensure reproducible training results.
+
+    Args:
+        seed (int): The integer seed value.
+        deterministic (bool): Whether to force strict PyTorch determinism. Defaults to True.
+
+    Returns:
+        None
     """
     random.seed(seed)
     np.random.seed(seed)
@@ -61,15 +94,35 @@ def set_seed(seed, deterministic=True):
         torch.backends.cudnn.benchmark = True
 
 
-def seed_worker(worker_id):
-    """Sets the seed for dataloader workers to maintain determinism in data loading."""
+def seed_worker(worker_id: int) -> None:
+    """
+    Sets the seed for dataloader workers to maintain determinism in data loading.
+
+    Args:
+        worker_id (int): The ID of the dataloader worker process.
+
+    Returns:
+        None
+    """
     worker_seed = torch.initial_seed() % (2**32)
     np.random.seed(worker_seed)
     random.seed(worker_seed)
 
 
-def save_training_run(filepath, config, seed, deterministic, extra_info=None):
-    """Saves the current run's configuration, seeds, and environment info to a JSON file."""
+def save_training_run(filepath: str, config: dict, seed: int, deterministic: bool, extra_info: dict = None) -> None:
+    """
+    Saves the current run's configuration, seeds, and environment info to a JSON file.
+
+    Args:
+        filepath (str): Destination path for the JSON manifest.
+        config (dict): The training configuration dictionary.
+        seed (int): The random seed used for this run.
+        deterministic (bool): Flag indicating if strict determinism was enabled.
+        extra_info (dict, optional): Additional info to append. Defaults to None.
+
+    Returns:
+        None
+    """
     run_info = {
         "config": config,
         "seed": seed,
@@ -83,8 +136,21 @@ def save_training_run(filepath, config, seed, deterministic, extra_info=None):
         json.dump(run_info, f, indent=2)
 
 
-def save_checkpoint(model, optimizer, epoch, gloss2id, val_acc, filepath):
-    """Saves the model weights, optimizer state, and current metrics to a checkpoint file."""
+def save_checkpoint(model: nn.Module, optimizer: optim.Optimizer, epoch: int, gloss2id: dict, val_acc: float, filepath: str) -> None:
+    """
+    Saves the model weights, optimizer state, and current metrics to a checkpoint file.
+
+    Args:
+        model (nn.Module): The PyTorch model being trained.
+        optimizer (optim.Optimizer): The optimizer managing model updates.
+        epoch (int): The current epoch number.
+        gloss2id (dict): The vocabulary mapping dictionary.
+        val_acc (float): The calculated validation accuracy (Top-1).
+        filepath (str): The destination path for the .pth checkpoint file.
+
+    Returns:
+        None
+    """
     checkpoint = {
         "epoch": epoch,
         "model_state_dict": model.state_dict(),
@@ -95,8 +161,20 @@ def save_checkpoint(model, optimizer, epoch, gloss2id, val_acc, filepath):
     torch.save(checkpoint, filepath)
 
 
-def load_checkpoint(filepath, model, optimizer, device):
-    """Loads the model and optimizer states from a given checkpoint path."""
+def load_checkpoint(filepath: str, model: nn.Module, optimizer: optim.Optimizer, device: torch.device) -> tuple:
+    """
+    Loads the model and optimizer states from a given checkpoint path.
+
+    Args:
+        filepath (str): Path to the saved .pth checkpoint file.
+        model (nn.Module): The initialized PyTorch model to load weights into.
+        optimizer (optim.Optimizer): The optimizer to load states into.
+        device (torch.device): Compute device for mapping weights.
+
+    Returns:
+        tuple[int, nn.Module, optim.Optimizer]: A tuple containing the starting epoch, 
+            the updated model, and the updated optimizer.
+    """
     checkpoint = torch.load(filepath, map_location=device, weights_only=False)
     model.load_state_dict(checkpoint["model_state_dict"])
     optimizer.load_state_dict(checkpoint["optimizer_state_dict"])
@@ -105,8 +183,19 @@ def load_checkpoint(filepath, model, optimizer, device):
     return epoch, model, optimizer
 
 
-def try_resume_checkpoint(filepath, model, optimizer, device):
-    """Safely attempts to resume training from a checkpoint, falling back to scratch if incompatible."""
+def try_resume_checkpoint(filepath: str, model: nn.Module, optimizer: optim.Optimizer, device: torch.device) -> tuple:
+    """
+    Safely attempts to resume training from a checkpoint, falling back to scratch if incompatible.
+
+    Args:
+        filepath (str): Path to the saved .pth checkpoint file.
+        model (nn.Module): The PyTorch model.
+        optimizer (optim.Optimizer): The optimizer.
+        device (torch.device): Compute device for mapping weights.
+
+    Returns:
+        tuple[int, nn.Module, optim.Optimizer]: The epoch to start from, the model, and the optimizer.
+    """
     try:
         return load_checkpoint(filepath, model, optimizer, device)
     except (KeyError, RuntimeError, ValueError) as exc:
@@ -116,10 +205,26 @@ def try_resume_checkpoint(filepath, model, optimizer, device):
         return 0, model, optimizer
 
 
-def evaluate(model, dataloader, criterion, device, id2gloss=None):
+def evaluate(model: nn.Module, dataloader: DataLoader, criterion: nn.Module, device: torch.device, id2gloss: dict = None) -> tuple:
     """
     Evaluates the ISLR model on the validation set.
     Computes loss, Top-1 accuracy, Top-3 accuracy, and Macro F1 Score.
+
+    Args:
+        model (nn.Module): The trained ISLR classification model.
+        dataloader (DataLoader): DataLoader providing the validation/test data.
+        criterion (nn.Module): The CrossEntropyLoss function.
+        device (torch.device): Compute device for evaluation.
+        id2gloss (dict, optional): Dictionary mapping IDs back to glosses. Used for tracking worst classes. Defaults to None.
+
+    Returns:
+        tuple: A tuple containing:
+            - float: Average validation loss.
+            - float: Top-1 accuracy percentage.
+            - float: Top-3 accuracy percentage.
+            - float: Macro F1 Score for class balance.
+            - list[tuple]: Information about the worst-performing gloss classes.
+            - torch.Tensor: The full confusion matrix.
     """
     model.eval()
     total_loss = 0.0
@@ -182,8 +287,14 @@ def evaluate(model, dataloader, criterion, device, id2gloss=None):
     return avg_loss, top1, top3, macro_f1, worst, conf
 
 
-def main():
-    """Main training loop for the Isolated Sign Language Recognition (ISLR) model."""
+def main() -> None:
+    """
+    Main training loop for the Isolated Sign Language Recognition (ISLR) model.
+    Handles data loading, model initialization, optimization steps, and checkpointing.
+
+    Returns:
+        None
+    """
     args = parse_args()
 
     if args.reproduce_run is not None:
@@ -323,13 +434,13 @@ def main():
         print(f"Epoch {epoch + 1:3d} | LR: {scheduler.get_last_lr()[0]:.2e}")
 
         for batch_idx, (frames, labels, lengths) in enumerate(train_loader):
-            frames = frames.permute(0, 3, 1, 2).to(DEVICE)  #[B, C, T, V]
+            frames = frames.permute(0, 3, 1, 2).to(DEVICE)
             labels = labels.to(DEVICE)
             lengths = lengths.to(DEVICE)
 
             optimizer.zero_grad()
 
-            logits = model(frames, lengths)  #[B, V]
+            logits = model(frames, lengths)
             loss = criterion(logits, labels)
             loss.backward()
 
