@@ -1,4 +1,9 @@
-"""Module containing MediaPipe inference node logic."""
+"""
+Module containing the Google MediaPipe computer vision integration.
+
+Handles the asynchronous extraction of body, hand, and face spatial coordinates
+from raw image frames to construct a unified skeleton representation.
+"""
 
 import time
 from collections import deque
@@ -14,7 +19,17 @@ from mediapipe.tasks import python
 from mediapipe.tasks.python import vision
 
 
-def _safe_part(raw, expected_len):
+def _safe_part(raw: list, expected_len: int) -> np.ndarray:
+    """
+    Ensures that an extracted body part array strictly matches the expected vertex count by padding or truncating.
+
+    Args:
+        raw (list): The raw extracted landmark points.
+        expected_len (int): The target length (e.g., 21 for hands).
+
+    Returns:
+        np.ndarray: A padded or truncated 2D numpy array of shape (expected_len, 4).
+    """
     arr = np.array(raw, dtype=np.float32) if len(raw) > 0 else np.zeros((0, 4), dtype=np.float32)
     arr = arr.reshape(-1, 4)
     if arr.shape[0] == 0:
@@ -24,8 +39,16 @@ def _safe_part(raw, expected_len):
     return arr[:expected_len]
 
 
-def format_frame_for_nn(frame_dict):
-    """Formats extracted raw keypoints for the nn."""
+def format_frame_for_nn(frame_dict: dict) -> np.ndarray:
+    """
+    Formats the raw MediaPipe dictionaries into a continuous sequence tensor for the neural network.
+
+    Args:
+        frame_dict (dict): Dictionary holding raw extracted nodes ('pose', 'face', 'lh', 'rh').
+
+    Returns:
+        np.ndarray: A concatenated array of shape (TOTAL_V, 3) containing [X, Y, Visibility].
+    """
     pose = _safe_part(frame_dict.get("pose", []), consts.POSE_LEN)
     face = _safe_part(frame_dict.get("face", []), consts.FACE_LEN)
     lh = _safe_part(frame_dict.get("lh", []), consts.LH_LEN)
@@ -36,10 +59,18 @@ def format_frame_for_nn(frame_dict):
 
 
 class MPNode:
-    """MediaPipe inference node class."""
+    """
+    MediaPipe processing class. Uses thread pools to run heavy face, pose, 
+    and hand detection models concurrently.
+    """
 
-    def __init__(self, max_window_len):
-        """Constructor of MPNode class."""
+    def __init__(self, max_window_len: int) -> None:
+        """
+        Initializes the MediaPipe detectors and the thread execution pool.
+
+        Args:
+            max_window_len (int): Maximum length of the sliding window queue holding processed frames.
+        """
         face_model_path = consts.TASKS_DIR / "face_landmarker_v2_with_blendshapes.task"
         face_base_options = python.BaseOptions(model_asset_path=str(face_model_path))
         face_options = vision.FaceLandmarkerOptions(
@@ -71,8 +102,8 @@ class MPNode:
 
         self.sliding_window = deque(maxlen=max_window_len)
 
-    def __del__(self):
-        """Destructor of MPNode class."""
+    def __del__(self) -> None:
+        """Destructor to securely release detector resources and shutdown the thread pool."""
         if hasattr(self, "face_detector"):
             self.face_detector.close()
         if hasattr(self, "pose_detector"):
@@ -82,8 +113,18 @@ class MPNode:
         if hasattr(self, "extractor_thread"):
             self.extractor_thread.shutdown(wait=False)
 
-    def extract_raw_keypoints(self, pose_result, hand_result, face_result):
-        """Extracts visible landmarks into a structured dictionary without zero-padding."""
+    def extract_raw_keypoints(self, pose_result, hand_result, face_result) -> dict:
+        """
+        Translates raw MediaPipe objects into a structured dictionary of coordinates.
+
+        Args:
+            pose_result: Output from PoseLandmarker.
+            hand_result: Output from HandLandmarker.
+            face_result: Output from FaceLandmarker.
+
+        Returns:
+            dict: Processed coordinates grouped by body part.
+        """
         frame_data = {"pose": [], "face": [], "lh": [], "rh": []}
 
         if pose_result and pose_result.pose_landmarks:
@@ -113,8 +154,16 @@ class MPNode:
 
         return frame_data
 
-    def run_mp_inference(self, frame):
-        """Runs MediaPipe inference on a singular frame."""
+    def run_mp_inference(self, frame: np.ndarray) -> dict:
+        """
+        Submits a single image frame to the asynchronous thread pool for concurrent evaluation.
+
+        Args:
+            frame (np.ndarray): Raw BGR frame from the camera.
+
+        Returns:
+            dict: Raw result objects from face, pose, and hand tracking models.
+        """
         last_timestamp_ms = int(time.time() * 1000)
 
         image_rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
@@ -145,16 +194,33 @@ class MPNode:
             "hand_result": hand_result,
         }
 
-    def get_keypoints_from_frame(self, frame):
-        """Returns a numpy array with all keypoints."""
+    def get_keypoints_from_frame(self, frame: np.ndarray) -> dict:
+        """
+        Executes inference and standardizes output for a given frame.
+
+        Args:
+            frame (np.ndarray): The raw video frame.
+
+        Returns:
+            dict: The extracted keypoints.
+        """
         inf_res = self.run_mp_inference(frame)
         raw_keypoints = self.extract_raw_keypoints(
             inf_res["pose_result"], inf_res["hand_result"], inf_res["face_result"]
         )
         return raw_keypoints
 
-    def receive_frame(self, frame):
-        """Receives a singular frame, runs inference and adds it to the sliding window."""
+    def receive_frame(self, frame: np.ndarray) -> None:
+        """
+        Accepts a frame, processes its keypoints, formats them for PyTorch, 
+        and queues them into the rolling sliding window buffer.
+
+        Args:
+            frame (np.ndarray): The raw video frame.
+            
+        Returns:
+            None
+        """
         raw_keypoints = self.get_keypoints_from_frame(frame)
         nn_ready_frame = format_frame_for_nn(raw_keypoints)
         self.sliding_window.append(nn_ready_frame)

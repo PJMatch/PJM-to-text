@@ -1,4 +1,9 @@
-"""Main PJMatch user desktop application."""
+"""
+Main PJMatch user desktop application.
+
+Initializes the UI, manages worker threads for computer vision and AI prediction,
+and acts as the main entry point for the software.
+"""
 
 import queue
 import sys
@@ -20,9 +25,13 @@ from workers import AIWorker, VisionWorker
 
 
 class ModeSelectionDialog(QDialog):
-    """A simple popup to choose the model before the app launches."""
+    """
+    A simple popup dialog to choose the operational model (CSLR or ISLR) 
+    before the main application window launches.
+    """
 
-    def __init__(self):
+    def __init__(self) -> None:
+        """Initializes the dialog window and sets up buttons."""
         super().__init__()
         self.setWindowTitle("PJMatch - Select Mode")
         self.selected_mode = "CSLR"
@@ -41,16 +50,30 @@ class ModeSelectionDialog(QDialog):
 
         self.setLayout(layout)
 
-    def select_mode(self, mode):
+    def select_mode(self, mode: str) -> None:
+        """
+        Stores the selected mode and closes the dialog successfully.
+
+        Args:
+            mode (str): The chosen mode identifier ('CSLR' or 'ISLR').
+        """
         self.selected_mode = mode
         self.accept()
 
 
 class PJMatchWindow(QMainWindow):
-    """PJMatch app main window."""
+    """
+    PJMatch application main window class.
+    Manages the UI layout and coordinates the inter-thread communication.
+    """
 
-    def __init__(self, mode="CSLR"):
-        """Init function for PJMatchWindow."""
+    def __init__(self, mode: str = "CSLR") -> None:
+        """
+        Initializes the main window, registers custom widgets, and starts worker threads.
+
+        Args:
+            mode (str): The operational mode ('CSLR' or 'ISLR'). Defaults to 'CSLR'.
+        """
         super().__init__()
         self.mode = mode
 
@@ -82,8 +105,13 @@ class PJMatchWindow(QMainWindow):
         self.resize(1000, 600)
         self.setWindowTitle(f"PJMatch - {self.mode} Mode")
 
-    def closeEvent(self, event):
-        """Stops threads on close."""
+    def closeEvent(self, event) -> None:
+        """
+        Handles the application close event, ensuring worker threads are stopped cleanly.
+
+        Args:
+            event: The close event triggered by the UI.
+        """
         self.vision_worker.stop()
         self.ai_worker.stop()
         event.accept()

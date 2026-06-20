@@ -1,7 +1,13 @@
-"""Workers module."""
+"""
+Worker threads module for managing parallel execution.
+
+Separates heavy computer vision tasks (MediaPipe) and neural network inference
+from the main GUI thread to prevent application freezing.
+"""
 
 import queue
 import time
+from typing import Optional
 
 import consts
 import cv2
@@ -11,15 +17,24 @@ from PySide6.QtCore import QThread, Signal
 
 
 class VisionWorker(QThread):
-    """Vision worker.
-
-    Manages frames and MediaPipe extraction.
+    """
+    Background worker thread for computer vision operations.
+    
+    Manages camera frames, applies MediaPipe extraction, and feeds a sliding 
+    window buffer. Emits ready frames to the UI for display.
     """
 
     frame_ready = Signal(object)
 
-    def __init__(self, shared_queue, mode="CSLR", testing_vid_path=None):
-        """Constructor of the VisionWorker."""
+    def __init__(self, shared_queue: queue.Queue, mode: str = "CSLR", testing_vid_path: Optional[str] = None) -> None:
+        """
+        Initializes the vision worker thread.
+
+        Args:
+            shared_queue (queue.Queue): Thread-safe queue to pass sliding windows to the AI worker.
+            mode (str): Application mode ('CSLR' or 'ISLR'). Defaults to "CSLR".
+            testing_vid_path (str, optional): Path to a local video file. If None, webcam is used. Defaults to None.
+        """
         super().__init__()
         self.running = True
         self.shared_queue = shared_queue
@@ -48,11 +63,13 @@ class VisionWorker(QThread):
         self.absolute_frame = 0
         self.playback_start_time = None
 
-    def run(self):
-        """Runs VisionWorker.
-
-        Reads frames, sends them to be displayed, enforces playback speed,
-        and has the MediaPipe node do the inference every stride.
+    def run(self) -> None:
+        """
+        Main execution loop for the VisionWorker.
+        
+        Reads frames from the video source, sends them to be displayed via signals, 
+        enforces playback speed (if a video file is used), and triggers the 
+        MediaPipe inference node at intervals defined by the stride.
         """
         self.playback_start_time = time.time()
 
@@ -89,8 +106,10 @@ class VisionWorker(QThread):
             if not self.shared_queue.full():
                 self.shared_queue.put((window_chunk, window_start))
 
-    def stop(self):
-        """Stops the thread."""
+    def stop(self) -> None:
+        """
+        Signals the thread to stop running and cleanly releases camera resources.
+        """
         self.running = False
         self.camera.release()
         self.quit()
@@ -98,14 +117,23 @@ class VisionWorker(QThread):
 
 
 class AIWorker(QThread):
-    """AI worker.
-
-    Manages the PJM predictor and sends the output to display.
+    """
+    Background worker thread for neural network inference.
+    
+    Pops sliding windows from the queue, runs the PJM predictor, applies 
+    tracking and smoothing, and emits the final text to the UI.
     """
 
     prediction_ready = Signal(str)
 
-    def __init__(self, shared_queue, mode="CSLR"):
+    def __init__(self, shared_queue: queue.Queue, mode: str = "CSLR") -> None:
+        """
+        Initializes the AI worker thread.
+
+        Args:
+            shared_queue (queue.Queue): Queue containing processed skeleton sliding windows.
+            mode (str): Application mode ('CSLR' or 'ISLR'). Defaults to "CSLR".
+        """
         super().__init__()
         self.running = True
         self.shared_queue = shared_queue
@@ -120,7 +148,14 @@ class AIWorker(QThread):
         self.candidate_count = 0
         self.required_confirmations = 2
 
-    def run(self):
+    def run(self) -> None:
+        """
+        Main execution loop for the AIWorker.
+        
+        Constantly polls the queue for new sliding windows, predicts glosses 
+        using the neural network, filters results using tracking mechanisms, 
+        and pushes final text strings to the GUI and log file.
+        """
         while self.running:
             try:
                 window_chunk, window_start = self.shared_queue.get(timeout=1)
@@ -176,7 +211,11 @@ class AIWorker(QThread):
                 #     with open("prediction_log.txt", "a", encoding="utf-8") as f:
                 #         f.write(voted_string + "\n")
 
-    def stop(self):
+    def stop(self) -> None:
+        """
+        Signals the thread to stop, commits any lingering sentences (in CSLR mode), 
+        and exits cleanly.
+        """
         if self.mode == "CSLR":
             leftover = self.smoother._commit()
             if leftover:

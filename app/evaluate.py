@@ -1,10 +1,26 @@
-"""Script to evaluate PJM live decoding using Precision, Recall, and F1-Score."""
+"""
+Script to evaluate PJM live decoding accuracy using Precision, Recall, and F1-Score.
+
+This tool compares a ground truth text file with the application's prediction log
+and calculates standard classification metrics to assess the system's performance.
+"""
 
 import os
 from collections import Counter
 
 
-def evaluate_batch(ground_truth_file: str, prediction_file: str):
+def evaluate_batch(ground_truth_file: str, prediction_file: str) -> None:
+    """
+    Reads ground truth and prediction files, extracts words, and calculates 
+    Precision, Recall, and F1-Score based on word occurrences.
+
+    Args:
+        ground_truth_file (str): Path to the text file containing the actual sentences.
+        prediction_file (str): Path to the text file containing the model's predictions.
+
+    Returns:
+        None
+    """
     try:
         with open(ground_truth_file, "r", encoding="utf-8") as f:
             target_text = " ".join(line.strip() for line in f.readlines())

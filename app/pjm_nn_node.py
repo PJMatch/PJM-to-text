@@ -1,124 +1,78 @@
-"""Module for the PJM predictor."""
+"""
+Module handling the core neural network prediction logic and text post-processing.
+"""
 
 import os
-import re
 import sys
-from dataclasses import dataclass
+from pathlib import Path
 
-import consts
 import numpy as np
 import torch
-import torch.nn.functional as F
 import yaml
 
 src_path = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "src"))
 if src_path not in sys.path:
     sys.path.append(src_path)
-
-from model import CoSign1SModel, GlossClassifier
-
-
-@dataclass
-class GlossPrediction:
-    """A single decoded gloss with its confidence."""
-
-    name: str
-    confidence: float
-
-
-class GlossTracker:
-    """Accumulates gloss predictions across sliding windows to filter noise."""
-
-    def __init__(self, mode="CSLR", max_history=15):
-        self.mode = mode
-        self.max_history = max_history
-        self.predictions: list[list[GlossPrediction]] = []
-
-    def vote(self, batch: list[GlossPrediction]) -> str | None:
-        if not batch:
-            return None
-
-        self.predictions.append(batch)
-        if len(self.predictions) > self.max_history:
-            self.predictions = self.predictions[-self.max_history :]
-
-        return self._resolve_votes()
-
-    def _resolve_votes(self) -> str | None:
-        if not self.predictions:
-            return None
-
-        ref_batch = self.predictions[-1]
-        if not ref_batch:
-            return None
-
-        if self.mode == "CSLR":
-            output_parts = []
-            for ref_gloss in ref_batch:
-                votes = 0
-                conf_sum = 0.0
-
-                for batch in self.predictions:
-                    match = next((g for g in batch if g.name == ref_gloss.name), None)
-                    if match:
-                        votes += 1
-                        conf_sum += match.confidence
-
-                if votes >= consts.VOTE_THRESHOLD:
-                    avg_conf = conf_sum / votes
-                    if avg_conf >= 0.25:
-                        output_parts.append(ref_gloss.name)
-
-            return " ".join(output_parts) if output_parts else None
-
-        else:
-            best_word = None
-            highest_score = 0.0
-
-            for ref_gloss in ref_batch:
-                conf_sum = 0.0
-
-                for batch in self.predictions:
-                    match = next((g for g in batch if g.name == ref_gloss.name), None)
-                    if match:
-                        conf_sum += match.confidence
-
-                if conf_sum >= consts.ISLR_CUMULATIVE_THRESHOLD and conf_sum > highest_score:
-                    highest_score = conf_sum
-                    best_word = ref_gloss.name
-
-            return best_word
+from model import CoSign1SModel  # noqa: E402
+from pjm_dataloader import build_gloss_vocab as build_pjm_vocab  # noqa: E402
 
 
 class SentenceSmoother:
-    """Smoother logic for parsing raw NN output into human-readable sentences."""
+    """
+    Smoothing logic for parsing raw neural network outputs into human-readable, stable sentences.
+    Merges overlapping sliding window predictions.
+    """
+    
+    def __init__(self, similarity_threshold: float = 0.5, patience: int = 3) -> None:
+        """
+        Initializes the sentence smoother mechanism.
 
-    def __init__(self, similarity_threshold=0.2):
+        Args:
+            similarity_threshold (float): Minimum overlap required to cluster words. Defaults to 0.5.
+            patience (int): Number of empty predictions required to finalize a sentence. Defaults to 3.
+        """
         self.similarity_threshold = similarity_threshold
+        self.patience = patience
         self.current_cluster = []
         self.last_emitted_sentence = ""
+        self.none_counter = 0
 
     def process(self, raw_text: str) -> str | None:
-        if not raw_text:
+        """
+        Processes raw text output from the neural network at each stride.
+
+        Args:
+            raw_text (str): The raw decoded sequence from the model.
+
+        Returns:
+            str | None: A finalized clean sentence if silence is detected, otherwise None.
+        """
+        text_lower = str(raw_text).strip().lower()
+
+        if not text_lower or text_lower == "none":
+            self.none_counter += 1
+            if self.none_counter >= self.patience:
+                return self._commit()
             return None
 
-        clean_text = re.sub(r"\(votes=\d+ conf=[0-9.]+\)", "", raw_text).strip()
-        words = clean_text.split()
+        self.none_counter = 0
 
-        if not words:
+        words = raw_text.split()
+        if not self.current_cluster and len(words) < 2:
+            self.current_cluster.append(words)
             return None
 
         if not self.current_cluster:
             self.current_cluster.append(words)
             return None
 
-        peak_words = max(self.current_cluster, key=len)
+        last_words = self.current_cluster[-1]
 
-        intersection = len(set(words) & set(peak_words))
-        union = len(set(words) | set(peak_words))
+        intersection = len(set(words) & set(last_words))
+        union = len(set(words) | set(last_words))
         similarity = intersection / union if union > 0 else 0
 
-        if similarity >= self.similarity_threshold or set(words).issubset(set(peak_words)):
+        if similarity > self.similarity_threshold or set(last_words).issubset(set(words)):
             self.current_cluster.append(words)
             return None
         else:
@@ -127,22 +81,22 @@ class SentenceSmoother:
             return clean_sentence
 
     def _commit(self) -> str | None:
+        """
+        Finalizes the active text cluster by extracting the longest sentence variation.
+
+        Returns:
+            str | None: The longest merged sentence string, or None if the cluster is empty.
+        """
         if not self.current_cluster:
             return None
 
         best_words = max(self.current_cluster, key=len)
         final_sentence = " ".join(best_words)
-        cluster_duration = len(self.current_cluster)
 
         self.current_cluster = []
+        self.none_counter = 0
 
-        if len(best_words) < 2 and cluster_duration < 4:
-            return None
-
-        if cluster_duration < 3:
-            return None
-
-        if final_sentence and final_sentence != self.last_emitted_sentence:
+        if final_sentence != self.last_emitted_sentence:
             self.last_emitted_sentence = final_sentence
             return final_sentence
 
@@ -150,12 +104,19 @@ class SentenceSmoother:
 
 
 class PJMPredictor:
-    """PJM neural network predictor."""
+    """
+    Wrapper class for the PyTorch sign language classification model.
+    Handles device mapping, checkpoint loading, and CTC greedy decoding.
+    """
 
-    def __init__(self, mode="CSLR", config_path="config.yaml"):
-        """Runs when the app starts. Loads config, vocab, model, and weights."""
-        self.mode = mode
+    def __init__(self, config_path: str = "config.yaml", mode: str = "CSLR") -> None:
+        """
+        Initializes the predictor, loads vocabularies and pre-trained weights.
 
+        Args:
+            config_path (str): Path to the YAML configuration file. Defaults to "config.yaml".
+            mode (str): Application mode ('CSLR' or 'ISLR'). Defaults to "CSLR".
+        """
         with open(config_path, "r") as f:
             self.config = yaml.safe_load(f)
 
@@ -167,91 +128,87 @@ class PJMPredictor:
             else "cpu"
         )
 
-        if self.mode == "CSLR":
-            ckpt_path = os.path.join(self.config["system"]["checkpoint_dir"], "cslr_model.pth")
-        else:
-            ckpt_path = os.path.join(self.config["system"]["checkpoint_dir"], "islr_model.pth")
+        src_path = Path(__file__).parent.resolve() / "../src"
 
+        annotation_dir = src_path / self.config["data"]["annotation_dir"]
+        train_ann = src_path / self.config["data"]["train_ann"]
+        test_ann = src_path / self.config["data"]["test_ann"]
+
+        self.gloss2id, self.id2gloss = build_pjm_vocab(annotation_dir, [train_ann, test_ann])
+        num_classes = len(self.gloss2id)
+
+        self.model = CoSign1SModel(num_classes=num_classes, dropout=0.0)
+
+        ckpt_path = os.path.join(self.config["system"]["checkpoint_dir"], "best_model.pth")
         if not os.path.exists(ckpt_path):
             raise FileNotFoundError(f"No checkpoint found at {ckpt_path}")
 
         checkpoint = torch.load(ckpt_path, map_location=self.device, weights_only=False)
-
-        self.gloss2id = checkpoint["gloss2id"]
-        self.id2gloss = {v: k for k, v in self.gloss2id.items()}
-        num_classes = len(self.gloss2id)
-
-        if self.mode == "ISLR":
-            self.model = GlossClassifier(num_classes=num_classes, dropout=0.0)
-        else:
-            self.model = CoSign1SModel(num_classes=num_classes, dropout=0.0)
-
         self.model.load_state_dict(checkpoint["model_state_dict"])
-        print(
-            f"[{self.mode} Mode] Loaded model weights from epoch {checkpoint.get('epoch', 'unknown')}"
-        )
+        print(f"Loaded model weights from epoch {checkpoint.get('epoch', 'unknown')}")
 
         self.model.to(self.device)
         self.model.eval()
 
-    def predict(self, window_chunk, window_start_frame=0) -> list[GlossPrediction]:
-        """Runs inference tailored to the current operation mode."""
+    def predict(self, window_chunk: list) -> str:
+        """
+        Feeds a single window of spatial landmarks into the neural network.
+
+        Args:
+            window_chunk (list): A list representing the sliding window frame data.
+
+        Returns:
+            str: The decoded sentence or word prediction.
+        """
         window_chunk = np.array(window_chunk)
         frames_tensor = torch.tensor(window_chunk, dtype=torch.float32).unsqueeze(0).to(self.device)
+
         frames_tensor = frames_tensor.permute(0, 3, 1, 2)
 
         seq_len = frames_tensor.size(2)
         frame_lengths = torch.tensor([seq_len], dtype=torch.long).to(self.device)
 
         with torch.no_grad():
-            if self.mode == "CSLR":
-                outputs = self.model(frames_tensor, frame_lengths, keep_prob=1.0)
-                logits = outputs["phi"]["main_logits"]
-                logit_lengths = outputs["phi"]["logit_lengths"].cpu()
-                raw = self._greedy_decode_single(logits[0], logit_lengths[0].item())
+            outputs = self.model(frames_tensor, frame_lengths, keep_prob=1.0)
+            logits = outputs["phi"]["main_logits"]
+            logit_lengths = outputs["phi"]["logit_lengths"].cpu()
 
-                predictions = []
-                for gloss_id, _, _, conf in raw:
-                    name = self.id2gloss.get(gloss_id, "<unk>")
-                    predictions.append(GlossPrediction(name=name, confidence=conf))
-                return predictions
+        predicted_text = self._greedy_decode_single(logits[0], logit_lengths[0].item(), threshold=0.6)
 
-            else:
-                logits = self.model(frames_tensor, frame_lengths)
-                probs = F.softmax(logits[0], dim=-1)
+        return predicted_text
 
-                top_probs, top_ids = torch.topk(probs, 3, dim=-1)
+    def _greedy_decode_single(self, sequence_logits: torch.Tensor, length: int, blank: int = 0, threshold: float = 0.6) -> str:
+        """
+        Applies standard CTC greedy decoding with a confidence threshold filter.
 
-                predictions = []
-                for i in range(3):
-                    prob = top_probs[i].item()
-                    pred_id = top_ids[i].item()
-                    gloss_name = self.id2gloss.get(pred_id, "<unk>")
+        If the model's highest probability for a class is below the threshold, 
+        it forces the output to be interpreted as the blank token (silence/noise).
 
-                    if gloss_name != "[BLANK]":
-                        predictions.append(GlossPrediction(name=gloss_name, confidence=prob))
+        Args:
+            sequence_logits (torch.Tensor): Raw model output logits.
+            length (int): Valid temporal length of the sequence.
+            blank (int): Index of the CTC blank token. Defaults to 0.
+            threshold (float): Minimum confidence required to accept a non-blank token. Defaults to 0.6.
 
-                return predictions
-
-    def _greedy_decode_single(self, sequence_logits, length, blank=0):
-        """CTC greedy decoding for CSLR."""
+        Returns:
+            str: A string of space-separated gloss translations.
+        """
         valid_logits = sequence_logits[:length]
-        probs = F.softmax(valid_logits, dim=-1)
+        
+        probs = torch.softmax(valid_logits, dim=-1)
+        
         max_probs, preds = torch.max(probs, dim=-1)
+        
+        preds[max_probs < threshold] = blank
 
-        result = []
+        hyp = []
         prev_token = -1
 
-        for t in range(len(preds)):
-            token = preds[t].item()
+        for token_tensor in preds:
+            token = token_tensor.item()
             if token != blank and token != prev_token:
-                result.append((token, t, t, [max_probs[t].item()]))
-            elif token != blank and token == prev_token:
-                _, start, _, scores = result[-1]
-                result[-1] = (token, start, t, scores + [max_probs[t].item()])
+                hyp.append(token)
             prev_token = token
 
-        return [
-            (gloss_id, start, end, sum(scores) / len(scores))
-            for gloss_id, start, end, scores in result
-        ]
+        hyp_words = [self.id2gloss.get(v, "<unk>") for v in hyp]
+        return " ".join(hyp_words)
