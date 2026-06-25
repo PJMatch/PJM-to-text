@@ -185,3 +185,61 @@ class AIWorker(QThread):
         self.running = False
         self.quit()
         self.wait()
+class BielikWorker(QThread):
+    word_received = Signal(str)
+
+    def __init__(self, parent=None) -> None:
+        super().__init__(parent)
+        self.is_running = True
+        self.accumulated_glosses = []
+        self.last_word_time = time.time()
+
+    def add_task(self, new_gloss: str) -> None:
+        new_gloss = new_gloss.strip()
+        if new_gloss and new_gloss.lower() != "blank":
+            self.accumulated_glosses.append(new_gloss)
+            self.last_word_time = time.time()  
+            print(f"LLM Dodano: {new_gloss}. Czekam 5s na kolejne")
+
+    def run(self) -> None:
+        import requests  
+        url = "http://localhost:11434/api/generate"
+        
+        while self.is_running:
+            if self.accumulated_glosses and (time.time() - self.last_word_time) >= 3.0:
+                gloss_sequence = " ".join(self.accumulated_glosses)
+                self.accumulated_glosses.clear()
+                
+                print(f"\n LLM Minęło 5s. WYSYŁAM DO MODELU: {gloss_sequence}")
+         
+                payload = {
+                    "model": "bielik",  
+                    "prompt": (
+                        "Jesteś profesjonalnym tłumaczem Polskiego Języka Migowego (PJM). "
+                        "Zamień podane surowe glosy na naturalne, poprawne gramatycznie zdanie w języku polskim.\n\n"
+                        "BEZWZGLĘDNE ZASADY:\n"
+                        "1. Nie dodawaj żadnych słów, których nie ma w glosach. Jeśli nie jesteś pewien, czy coś dodać, NIE DODAWAJ tego.\n"
+                        "2. Ignoruj bezpośrednie powtórzenia (np. jeśli widzisz 'MAMA MAMA KUPIĆ', potraktuj to jako 'MAMA KUPIĆ').\n"
+                        "3. Zwróć TYLKO I WYŁĄCZNIE przetłumaczone zdanie. Nie dodawaj żadnych wstępów (np. 'Oto zdanie:'), komentarzy ani cudzysłowów.\n"
+                        "4. Odmieniaj słowa przez przypadki i używaj odpowiednich czasów, aby brzmiało to naturalnie.\n\n"
+                        f"Glosy do przetłumaczenia: {gloss_sequence}"
+                    ),
+                    "stream": False
+                }
+
+                try:
+                    response = requests.post(url, json=payload)
+                    if response.status_code == 200:
+                        sentence = response.json().get("response", "").strip()
+                        print(f"\n LLM Gotowe zdanie: {sentence}")
+                        self.word_received.emit(sentence)
+                    else:
+                        print(f"\n[LLM BŁĄD HTTP]: {response.status_code} - {response.text}")
+                except Exception as e:
+                    print(f"Błąd Ollama: {str(e)}")
+
+            time.sleep(0.1)
+
+    def stop(self) -> None:
+        self.is_running = False
+        self.wait()

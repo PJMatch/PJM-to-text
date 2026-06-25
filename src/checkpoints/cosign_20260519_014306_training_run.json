@@ -1,0 +1,64 @@
+{
+  "config": {
+    "training": {
+      "epochs": 40,
+      "batch_size": 8,
+      "learning_rate": 0.0004,
+      "weight_decay": 0.0001,
+      "grad_clip": 1.0,
+      "kl_weight": 0.5,
+      "mirror_data": false,
+      "keep_prob": 0.8,
+      "init_weights": null,
+      "kl_warmup_start": 5,
+      "kl_warmup_end": 10,
+      "deterministic": false
+    },
+    "model": {
+      "dropout": 0.2
+    },
+    "data": {
+      "dataset": "phoenix",
+      "train_dir": "/pjm/tmp/datasets/phoenix/mmpose_dataset/train",
+      "dev_dir": "/pjm/tmp/datasets/phoenix/mmpose_dataset/dev",
+      "test_dir": "/pjm/tmp/datasets/phoenix/mmpose_dataset/test",
+      "annotation_dir": "annotations",
+      "train_ann": "annotations/PHOENIX-2014-T.train.corpus.csv",
+      "dev_ann": "annotations/PHOENIX-2014-T.dev.corpus.csv",
+      "test_ann": "annotations/PHOENIX-2014-T.test.corpus.csv",
+      "num_workers": 8,
+      "pin_memory": true
+    },
+    "optimizer": {
+      "milestones": [
+        20,
+        35
+      ],
+      "gamma": 0.1
+    },
+    "system": {
+      "checkpoint_dir": "checkpoints",
+      "device": "auto"
+    },
+    "logging": {
+      "tensorboard": true,
+      "wandb": false,
+      "log_dir": "runs",
+      "log_interval": 50,
+      "histogram_interval": 5
+    }
+  },
+  "seed": 42,
+  "deterministic": false,
+  "torch_version": "2.10.0+cu128",
+  "cuda_available": true,
+  "run_id": "cosign_20260519_014306",
+  "num_classes": 1099,
+  "train_samples": 7096,
+  "dev_samples": 519,
+  "device": "cuda",
+  "best_wer": 0.821504802561366,
+  "best_wer_epoch": 39,
+  "best_train_loss": 8.435544560700151,
+  "best_val_loss": 7.77117275091318
+}
